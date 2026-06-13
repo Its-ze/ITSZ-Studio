@@ -6,7 +6,7 @@ Photo viewer and editor with local web preview, desktop packaging, batch tools, 
 
 - Open multiple local images with the toolbar or drag and drop.
 - Set a desktop home folder, load that folder into the library, and open it from the app.
-- Detect filesystem-mounted cameras or SD cards with photo folders and ask whether to import.
+- Detect filesystem-mounted cameras, SD cards, and Windows MTP/PTP cameras such as the Canon EOS R8, then ask whether to import.
 - Import camera photos into the home folder with an optional delete-originals-after-copy checkbox.
 - Recognizes common photo extensions including JPEG, PNG, WebP, AVIF, HEIC/HEIF, TIFF, DNG, CR2/CR3, NEF, ARW, RAF, ORF, RW2, and other camera RAW variants.
 - Browse images from the side library or bottom filmstrip.

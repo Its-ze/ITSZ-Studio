@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog, shell } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { execFile } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -31,6 +32,7 @@ const MIME_BY_EXT = new Map([
   [".webp", "image/webp"],
 ]);
 const settingsPath = () => path.join(app.getPath("userData"), "settings.json");
+const WINDOWS_PORTABLE_COPY_FLAGS = "20";
 
 let mainWindow;
 let cameraPollTimer;
@@ -165,6 +167,302 @@ function isPhotoPath(filePath) {
   return PHOTO_EXTENSIONS.has(extensionFor(filePath));
 }
 
+function powerShellQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+const WINDOWS_PHOTO_EXTENSIONS = Array.from(PHOTO_EXTENSIONS).map(powerShellQuote).join(", ");
+
+const WINDOWS_PORTABLE_CAMERA_COMMON_SCRIPT = String.raw`
+$PhotoExtensions = @(${WINDOWS_PHOTO_EXTENSIONS})
+
+function Get-PortablePhotoExtension {
+  param($Folder, $Item)
+
+  $name = [string]$Item.Name
+  $nameExtension = [System.IO.Path]::GetExtension($name).ToLowerInvariant()
+  if ($PhotoExtensions -contains $nameExtension) {
+    return $nameExtension
+  }
+
+  $type = [string]$Folder.GetDetailsOf($Item, 1)
+  if ($type -match '^\s*([A-Za-z0-9]{2,5})\s+File\s*$') {
+    $extension = "." + $Matches[1].ToLowerInvariant()
+    if ($extension -eq ".jpeg") {
+      $extension = ".jpg"
+    }
+    if ($PhotoExtensions -contains $extension) {
+      return $extension
+    }
+  }
+
+  if ($type -match 'JPEG|JPG') {
+    return ".jpg"
+  }
+  return ""
+}
+
+function Get-PortablePhotoName {
+  param($Folder, $Item)
+
+  $extension = Get-PortablePhotoExtension $Folder $Item
+  if (-not $extension) {
+    return ""
+  }
+
+  $name = [string]$Item.Name
+  if (-not $name.ToLowerInvariant().EndsWith($extension)) {
+    $name = "$name$extension"
+  }
+  return $name
+}
+
+function Get-SafeSegment {
+  param([string]$Value)
+  $segment = ($Value -replace '[<>:"/\\|?*\x00-\x1f]', '-').Trim()
+  if ($segment) {
+    return $segment
+  }
+  return "Camera"
+}
+
+function Get-PortablePhotoEntries {
+  param($Device, [int]$MaxFiles)
+
+  $entries = New-Object System.Collections.Generic.List[object]
+
+  function Walk-PortableItem {
+    param($Item, [string]$RelativeFolder, [int]$Depth)
+
+    if ($entries.Count -ge $MaxFiles -or $Depth -gt 12 -or -not $Item.IsFolder) {
+      return
+    }
+
+    $folder = $Item.GetFolder
+    if (-not $folder) {
+      return
+    }
+
+    foreach ($child in @($folder.Items())) {
+      if ($entries.Count -ge $MaxFiles) {
+        return
+      }
+
+      if ($child.IsFolder) {
+        $nextFolder = if ($RelativeFolder) { "$RelativeFolder/$($child.Name)" } else { [string]$child.Name }
+        Walk-PortableItem $child $nextFolder ($Depth + 1)
+        continue
+      }
+
+      $fileName = Get-PortablePhotoName $folder $child
+      if (-not $fileName) {
+        continue
+      }
+
+      $entries.Add([pscustomobject]@{
+        Item = $child
+        Name = $fileName
+        Type = [string]$folder.GetDetailsOf($child, 1)
+        RelativeFolder = $RelativeFolder
+      }) | Out-Null
+    }
+  }
+
+  Walk-PortableItem $Device "" 0
+  return $entries
+}
+
+function Get-PortableDeviceByPath {
+  param($Computer, [string]$DevicePath, [string]$DeviceName)
+
+  foreach ($device in @($Computer.Items())) {
+    if (-not $device.IsFolder) {
+      continue
+    }
+    if ($DevicePath -and [string]$device.Path -eq $DevicePath) {
+      return $device
+    }
+  }
+
+  foreach ($device in @($Computer.Items())) {
+    if ($device.IsFolder -and $DeviceName -and [string]$device.Name -eq $DeviceName) {
+      return $device
+    }
+  }
+
+  return $null
+}
+`;
+
+const WINDOWS_PORTABLE_CAMERA_LIST_SCRIPT = String.raw`
+$ErrorActionPreference = "Stop"
+${WINDOWS_PORTABLE_CAMERA_COMMON_SCRIPT}
+
+$shell = New-Object -ComObject Shell.Application
+$computer = $shell.Namespace("shell:MyComputerFolder")
+$devices = New-Object System.Collections.Generic.List[object]
+
+foreach ($device in @($computer.Items())) {
+  if (-not $device.IsFolder) {
+    continue
+  }
+
+  $devicePath = [string]$device.Path
+  if (-not $devicePath.StartsWith("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}")) {
+    continue
+  }
+
+  $photos = @(Get-PortablePhotoEntries $device 5000)
+  if (-not $photos.Count) {
+    continue
+  }
+
+  $devices.Add([pscustomobject]@{
+    name = [string]$device.Name
+    shellPath = $devicePath
+    root = [string]$device.Name
+    photoCount = $photos.Count
+    sampleNames = @($photos | Select-Object -First 3 | ForEach-Object { $_.Name })
+  }) | Out-Null
+}
+
+ConvertTo-Json -InputObject @($devices.ToArray()) -Compress -Depth 6
+`;
+
+const WINDOWS_PORTABLE_CAMERA_IMPORT_SCRIPT = String.raw`
+param([string]$InputPath)
+$ErrorActionPreference = "Stop"
+${WINDOWS_PORTABLE_CAMERA_COMMON_SCRIPT}
+
+$request = Get-Content -LiteralPath $InputPath -Raw | ConvertFrom-Json
+$shell = New-Object -ComObject Shell.Application
+$computer = $shell.Namespace("shell:MyComputerFolder")
+$device = Get-PortableDeviceByPath $computer ([string]$request.shellPath) ([string]$request.name)
+if (-not $device) {
+  throw "Camera is no longer available."
+}
+
+$destinationRoot = [string]$request.destinationRoot
+$deleteOriginals = [bool]$request.deleteOriginals
+$maxFiles = [int]$request.maxFiles
+if ($maxFiles -lt 1) {
+  $maxFiles = 10000
+}
+
+New-Item -ItemType Directory -Force -Path $destinationRoot | Out-Null
+$entries = @(Get-PortablePhotoEntries $device $maxFiles)
+$copiedPaths = New-Object System.Collections.Generic.List[string]
+$failures = New-Object System.Collections.Generic.List[object]
+$deleted = 0
+$deleteFailures = 0
+
+function Get-UniqueDestinationPath {
+  param([string]$DestinationPath)
+
+  if (-not (Test-Path -LiteralPath $DestinationPath)) {
+    return $DestinationPath
+  }
+
+  $directory = [System.IO.Path]::GetDirectoryName($DestinationPath)
+  $name = [System.IO.Path]::GetFileNameWithoutExtension($DestinationPath)
+  $extension = [System.IO.Path]::GetExtension($DestinationPath)
+  $index = 2
+  do {
+    $next = Join-Path $directory "$name-$index$extension"
+    $index += 1
+  } while (Test-Path -LiteralPath $next)
+  return $next
+}
+
+function Wait-CopiedPortableFile {
+  param([string]$FolderPath)
+
+  $deadline = (Get-Date).AddSeconds(180)
+  $lastPath = ""
+  $lastLength = -1
+  $stableCount = 0
+
+  do {
+    Start-Sleep -Milliseconds 500
+    $files = @(Get-ChildItem -LiteralPath $FolderPath -File -ErrorAction SilentlyContinue)
+    if ($files.Count) {
+      $file = $files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+      if ($file.FullName -eq $lastPath -and $file.Length -eq $lastLength -and $file.Length -gt 0) {
+        $stableCount += 1
+      } else {
+        $stableCount = 0
+        $lastPath = $file.FullName
+        $lastLength = $file.Length
+      }
+      if ($stableCount -ge 2) {
+        return $file
+      }
+    }
+  } while ((Get-Date) -lt $deadline)
+
+  throw "Timed out waiting for camera copy to finish."
+}
+
+foreach ($entry in $entries) {
+  $staging = Join-Path $destinationRoot (".incoming-" + [guid]::NewGuid().ToString("N"))
+  try {
+    New-Item -ItemType Directory -Force -Path $staging | Out-Null
+    $stagingFolder = $shell.Namespace($staging)
+    if (-not $stagingFolder) {
+      throw "Could not open staging folder."
+    }
+
+    $stagingFolder.CopyHere($entry.Item, ${WINDOWS_PORTABLE_COPY_FLAGS})
+    $copied = Wait-CopiedPortableFile $staging
+
+    $relativeFolder = [string]$entry.RelativeFolder
+    $safeSegments = @()
+    if ($relativeFolder) {
+      $safeSegments = $relativeFolder.Split("/") | Where-Object { $_ } | ForEach-Object { Get-SafeSegment $_ }
+    }
+
+    $targetDirectory = $destinationRoot
+    foreach ($segment in $safeSegments) {
+      $targetDirectory = Join-Path $targetDirectory $segment
+    }
+    New-Item -ItemType Directory -Force -Path $targetDirectory | Out-Null
+
+    $targetPath = Get-UniqueDestinationPath (Join-Path $targetDirectory ([string]$entry.Name))
+    Move-Item -LiteralPath $copied.FullName -Destination $targetPath
+    $copiedPaths.Add($targetPath) | Out-Null
+
+    if ($deleteOriginals) {
+      try {
+        $entry.Item.InvokeVerb("delete")
+        $deleted += 1
+      } catch {
+        $deleteFailures += 1
+        $failures.Add([pscustomobject]@{
+          name = [string]$entry.Name
+          message = "Copied, but deleting the original failed: $($_.Exception.Message)"
+        }) | Out-Null
+      }
+    }
+  } catch {
+    $failures.Add([pscustomobject]@{
+      name = [string]$entry.Name
+      message = $_.Exception.Message
+    }) | Out-Null
+  } finally {
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
+ConvertTo-Json -InputObject ([pscustomobject]@{
+  copied = $copiedPaths.Count
+  deleted = $deleted
+  failed = $failures.Count
+  deleteFailures = $deleteFailures
+  failures = @($failures.ToArray())
+  copiedPaths = @($copiedPaths.ToArray())
+}) -Compress -Depth 8
+`;
+
 function isPreviewablePath(filePath) {
   return PREVIEW_EXTENSIONS.has(extensionFor(filePath));
 }
@@ -283,18 +581,58 @@ function publicCameraDevice(device) {
   };
 }
 
-function runPowerShellJson(script) {
+function parsePowerShellJson(stdout) {
+  if (!stdout.trim()) return [];
+  const parsed = JSON.parse(stdout);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+function runPowerShellJson(script, options = {}) {
   return new Promise((resolve) => {
-    execFile("powershell.exe", ["-NoProfile", "-Command", script], { windowsHide: true, timeout: 9000 }, (error, stdout) => {
+    execFile("powershell.exe", ["-NoProfile", "-Command", script], { windowsHide: true, timeout: options.timeout || 9000 }, (error, stdout) => {
       if (error || !stdout.trim()) {
         resolve([]);
         return;
       }
       try {
-        const parsed = JSON.parse(stdout);
-        resolve(Array.isArray(parsed) ? parsed : [parsed]);
+        resolve(parsePowerShellJson(stdout));
       } catch {
         resolve([]);
+      }
+    });
+  });
+}
+
+function runPowerShellScriptJson(script, options = {}) {
+  return new Promise((resolve, reject) => {
+    const stamp = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const scriptPath = path.join(app.getPath("temp"), `itsz-studio-${stamp}.ps1`);
+    const inputPath = options.input ? path.join(app.getPath("temp"), `itsz-studio-${stamp}.json`) : "";
+    const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath];
+
+    try {
+      fs.writeFileSync(scriptPath, script, "utf8");
+      if (inputPath) {
+        fs.writeFileSync(inputPath, JSON.stringify(options.input), "utf8");
+        args.push("-InputPath", inputPath);
+      }
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    execFile("powershell.exe", args, { windowsHide: true, timeout: options.timeout || 30000 }, (error, stdout, stderr) => {
+      fs.rmSync(scriptPath, { force: true });
+      if (inputPath) fs.rmSync(inputPath, { force: true });
+
+      if (error) {
+        reject(new Error((stderr || error.message || "PowerShell failed").trim()));
+        return;
+      }
+      try {
+        resolve(options.expectArray === false ? JSON.parse(stdout || "{}") : parsePowerShellJson(stdout));
+      } catch (parseError) {
+        reject(parseError);
       }
     });
   });
@@ -313,6 +651,29 @@ async function listWindowsVolumes() {
         removable: volume.DriveType === 2,
       };
     });
+}
+
+function portableDeviceId(shellPath) {
+  return `wpd:${crypto.createHash("sha1").update(shellPath).digest("hex")}`;
+}
+
+async function listWindowsPortableCameras() {
+  try {
+    const devices = await runPowerShellScriptJson(WINDOWS_PORTABLE_CAMERA_LIST_SCRIPT, { timeout: 45000 });
+    return devices
+      .filter((device) => device.shellPath && device.photoCount > 0)
+      .map((device) => ({
+        id: portableDeviceId(device.shellPath),
+        kind: "wpd",
+        name: device.name || "Portable Camera",
+        root: device.root || device.name || "Portable Camera",
+        shellPath: device.shellPath,
+        photoCount: Number(device.photoCount) || 0,
+        sampleNames: Array.isArray(device.sampleNames) ? device.sampleNames : [],
+      }));
+  } catch {
+    return [];
+  }
 }
 
 function decodeMountPath(value) {
@@ -355,6 +716,10 @@ async function scanCameraDevices() {
     if (device && (volume.removable || fs.existsSync(path.join(volume.root, "DCIM")))) {
       devices.push(device);
     }
+  }
+
+  if (process.platform === "win32") {
+    devices.push(...await listWindowsPortableCameras());
   }
 
   cameraDevices = new Map(devices.map((device) => [device.id, device]));
@@ -415,14 +780,48 @@ function uniqueDestinationPath(destinationPath) {
   return next;
 }
 
-function importCameraPhotos(deviceId, deleteOriginals) {
+async function importPortableCameraPhotos(device, settings, deleteOriginals) {
+  const date = new Date().toISOString().slice(0, 10);
+  const importRoot = path.join(settings.homeFolder, "Camera Imports", sanitizeSegment(device.name), date);
+  const result = await runPowerShellScriptJson(WINDOWS_PORTABLE_CAMERA_IMPORT_SCRIPT, {
+    expectArray: false,
+    timeout: 30 * 60 * 1000,
+    input: {
+      shellPath: device.shellPath,
+      name: device.name,
+      destinationRoot: importRoot,
+      deleteOriginals,
+      maxFiles: 10000,
+    },
+  });
+  const copiedPaths = Array.isArray(result.copiedPaths) ? result.copiedPaths : [];
+
+  return {
+    copied: Number(result.copied) || copiedPaths.length,
+    deleted: Number(result.deleted) || 0,
+    failed: Number(result.failed) || 0,
+    failures: Array.isArray(result.failures) ? result.failures : [],
+    destination: importRoot,
+    records: copiedPaths.slice(0, 1000).map((filePath) => makePhotoRecord(filePath, importRoot)),
+  };
+}
+
+async function importCameraPhotos(deviceId, deleteOriginals) {
   const settings = readSettings();
   if (!settings.homeFolder) {
     throw new Error("Set a home folder before importing from a camera.");
   }
 
   const device = cameraDevices.get(deviceId);
-  if (!device || !fs.existsSync(device.root)) {
+  if (!device) {
+    throw new Error("Camera is no longer available.");
+  }
+
+  if (device.kind === "wpd") {
+    return importPortableCameraPhotos(device, settings, deleteOriginals);
+  }
+
+  if (!fs.existsSync(device.root)) {
     throw new Error("Camera is no longer available.");
   }
 

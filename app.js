@@ -88,6 +88,13 @@ const PHOTO_EXTENSIONS = new Set([
 ]);
 
 const PREVIEW_EXTENSIONS = new Set([".avif", ".bmp", ".dib", ".gif", ".jpe", ".jpeg", ".jpg", ".png", ".svg", ".webp"]);
+const JPEG_EXTENSIONS = new Set([".jpe", ".jpeg", ".jpg"]);
+const RAW_EXTENSIONS = new Set([
+  ".3fr", ".arw", ".cr2", ".cr3", ".crw", ".dng", ".erf", ".fff", ".hif",
+  ".iiq", ".kdc", ".mef", ".mos", ".mrw", ".nef", ".nrw", ".orf", ".pef",
+  ".ptx", ".raf", ".raw", ".rw2", ".rwl", ".sr2", ".srf", ".srw", ".x3f",
+]);
+const RAW_PAIR_SETTINGS_KEY = "itszStudio.rawPairing";
 
 const state = {
   images: [],
@@ -112,6 +119,10 @@ const state = {
     cameraStatus: "Desktop app only",
     importing: false,
   },
+  rawPairing: {
+    enabled: true,
+    defaultSide: "jpg",
+  },
   zoom: 1,
   rotation: 0,
   flipX: 1,
@@ -127,6 +138,7 @@ const els = {};
 document.addEventListener("DOMContentLoaded", () => {
   bindElements();
   bindEvents();
+  loadRawPairingSettings();
   loadSampleAlbum();
   render();
   initDesktopUpdates();
@@ -169,6 +181,9 @@ function bindElements() {
     importCameraButton: document.getElementById("importCameraButton"),
     ignoreCameraButton: document.getElementById("ignoreCameraButton"),
     deleteCameraOriginalsToggle: document.getElementById("deleteCameraOriginalsToggle"),
+    pairRawJpgToggle: document.getElementById("pairRawJpgToggle"),
+    rawPairDefaultSelect: document.getElementById("rawPairDefaultSelect"),
+    rawPairStatus: document.getElementById("rawPairStatus"),
     updateAutoCheckToggle: document.getElementById("updateAutoCheckToggle"),
     checkUpdatesButton: document.getElementById("checkUpdatesButton"),
     downloadUpdateButton: document.getElementById("downloadUpdateButton"),
@@ -212,12 +227,32 @@ function bindElements() {
     detailType: document.getElementById("detailType"),
     detailSize: document.getElementById("detailSize"),
     detailModified: document.getElementById("detailModified"),
+    detailPair: document.getElementById("detailPair"),
     histogramCanvas: document.getElementById("histogramCanvas"),
     histogramPeak: document.getElementById("histogramPeak"),
     viewZoom: document.getElementById("viewZoom"),
     viewRotation: document.getElementById("viewRotation"),
     viewFlip: document.getElementById("viewFlip"),
   });
+}
+
+function loadRawPairingSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RAW_PAIR_SETTINGS_KEY) || "{}");
+    state.rawPairing = {
+      enabled: saved.enabled !== false,
+      defaultSide: saved.defaultSide === "raw" ? "raw" : "jpg",
+    };
+  } catch {
+    state.rawPairing = {
+      enabled: true,
+      defaultSide: "jpg",
+    };
+  }
+}
+
+function saveRawPairingSettings() {
+  localStorage.setItem(RAW_PAIR_SETTINGS_KEY, JSON.stringify(state.rawPairing));
 }
 
 function bindEvents() {
@@ -259,6 +294,16 @@ function bindEvents() {
   els.ignoreCameraButton.addEventListener("click", ignoreDetectedCamera);
   els.deleteCameraOriginalsToggle.addEventListener("change", () => {
     setDeleteCameraOriginals(els.deleteCameraOriginalsToggle.checked);
+  });
+  els.pairRawJpgToggle.addEventListener("change", () => {
+    updateRawPairing({
+      enabled: els.pairRawJpgToggle.checked,
+    });
+  });
+  els.rawPairDefaultSelect.addEventListener("change", () => {
+    updateRawPairing({
+      defaultSide: els.rawPairDefaultSelect.value === "raw" ? "raw" : "jpg",
+    });
   });
   els.checkUpdatesButton.addEventListener("click", checkForUpdates);
   els.downloadUpdateButton.addEventListener("click", downloadUpdate);
@@ -576,6 +621,115 @@ function extensionFromName(name) {
   return dot >= 0 ? String(name).slice(dot).toLowerCase() : "";
 }
 
+function stemFromName(name) {
+  return String(name || "").replace(/\.[^.]+$/, "");
+}
+
+function normalizedDirectory(value) {
+  const text = String(value || "").replace(/\\/g, "/");
+  const slash = text.lastIndexOf("/");
+  return slash >= 0 ? text.slice(0, slash).toLowerCase() : "";
+}
+
+function pairRoleForImage(image) {
+  const extension = extensionFromName(image?.name);
+  if (JPEG_EXTENSIONS.has(extension)) return "jpg";
+  if (RAW_EXTENSIONS.has(extension)) return "raw";
+  return "";
+}
+
+function pairKeyForImage(image) {
+  const role = pairRoleForImage(image);
+  if (!role || image?.sample) return "";
+  const location = image.relativePath || image.sourcePath || image.name;
+  return `${normalizedDirectory(location)}::${stemFromName(image.name).toLowerCase()}`;
+}
+
+function buildRawPairGroups() {
+  const groups = new Map();
+  state.images.forEach((image) => {
+    const role = pairRoleForImage(image);
+    const key = pairKeyForImage(image);
+    if (!role || !key) return;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        raw: [],
+        jpg: [],
+      });
+    }
+    groups.get(key)[role].push(image);
+  });
+  return groups;
+}
+
+function selectPairImage(group) {
+  const defaultSide = state.rawPairing.defaultSide === "raw" ? "raw" : "jpg";
+  const primary = group[defaultSide][0];
+  const fallback = defaultSide === "raw" ? group.jpg[0] : group.raw[0];
+  return primary || fallback || null;
+}
+
+function getLibraryImages() {
+  state.images.forEach((image) => {
+    delete image.pairInfo;
+  });
+
+  if (!state.rawPairing.enabled) {
+    return state.images;
+  }
+
+  const groups = buildRawPairGroups();
+  const emitted = new Set();
+  const visible = [];
+
+  state.images.forEach((image) => {
+    const key = pairKeyForImage(image);
+    const group = key ? groups.get(key) : null;
+    const isPair = group && group.raw.length && group.jpg.length;
+    if (!isPair) {
+      visible.push(image);
+      return;
+    }
+
+    if (emitted.has(key)) return;
+    emitted.add(key);
+    const selected = selectPairImage(group);
+    if (!selected) return;
+    selected.pairInfo = {
+      key,
+      raw: group.raw[0],
+      jpg: group.jpg[0],
+      role: selected === group.raw[0] ? "raw" : "jpg",
+    };
+    visible.push(selected);
+  });
+
+  return visible;
+}
+
+function getPairCounts() {
+  let pairs = 0;
+  for (const group of buildRawPairGroups().values()) {
+    if (group.raw.length && group.jpg.length) pairs += 1;
+  }
+  return {
+    pairs,
+    visible: getLibraryImages().length,
+    total: state.images.length,
+  };
+}
+
+function findVisibleIndexForImageId(imageId) {
+  const images = getLibraryImages();
+  return images.findIndex((image) => image.id === imageId || image.pairInfo?.raw?.id === imageId || image.pairInfo?.jpg?.id === imageId);
+}
+
+function setActiveByImageId(imageId) {
+  const index = findVisibleIndexForImageId(imageId);
+  state.activeIndex = index >= 0 ? index : Math.min(state.activeIndex, Math.max(0, getLibraryImages().length - 1));
+}
+
 function isSupportedPhotoFile(file) {
   const type = String(file?.type || "");
   return Boolean(file && (type.startsWith("image/") || PHOTO_EXTENSIONS.has(extensionFromName(file.name))));
@@ -633,7 +787,7 @@ function addImportedImages(imported) {
 
   const hadOnlySamples = state.images.every((image) => image.sample);
   state.images = hadOnlySamples ? clean : [...state.images, ...clean];
-  state.activeIndex = hadOnlySamples ? 0 : state.images.length - clean.length;
+  setActiveByImageId(clean[0].id);
   state.editHistory = [];
   resetView(false);
   render();
@@ -723,10 +877,13 @@ function render() {
 }
 
 function renderLists() {
-  els.imageCount.textContent = String(state.images.length);
-  els.collectionStatus.textContent = `${state.images.length} image${state.images.length === 1 ? "" : "s"}`;
-  els.thumbRail.replaceChildren(...state.images.map((image, index) => createThumb(image, index)));
-  els.filmstrip.replaceChildren(...state.images.map((image, index) => createStripButton(image, index)));
+  const images = getLibraryImages();
+  const pairCounts = getPairCounts();
+  const hiddenCount = pairCounts.total - pairCounts.visible;
+  els.imageCount.textContent = String(images.length);
+  els.collectionStatus.textContent = `${images.length} visible${hiddenCount ? `, ${hiddenCount} paired` : ""}`;
+  els.thumbRail.replaceChildren(...images.map((image, index) => createThumb(image, index)));
+  els.filmstrip.replaceChildren(...images.map((image, index) => createStripButton(image, index)));
 }
 
 function createThumb(image, index) {
@@ -749,9 +906,19 @@ function createThumb(image, index) {
 
   const meta = document.createElement("div");
   meta.className = "thumbMeta";
-  meta.textContent = image.width && image.height ? `${image.width} x ${image.height}` : image.type;
+  meta.textContent = image.pairInfo
+    ? `RAW + JPG - using ${image.pairInfo.role.toUpperCase()}`
+    : image.width && image.height ? `${image.width} x ${image.height}` : image.type;
 
-  copy.append(name, meta);
+  if (image.pairInfo) {
+    const badge = document.createElement("div");
+    badge.className = "pairBadge";
+    badge.textContent = "paired";
+    copy.append(name, meta, badge);
+  } else {
+    copy.append(name, meta);
+  }
+
   button.append(img, copy);
   return button;
 }
@@ -773,7 +940,9 @@ function createStripButton(image, index) {
 
 function renderDetails() {
   const active = getActive();
-  els.activeName.textContent = active ? active.name : "No image";
+  els.activeName.textContent = active
+    ? active.pairInfo ? `${active.name} - RAW + JPG` : active.name
+    : "No image";
   els.detailName.textContent = active ? active.name : "-";
   els.detailPixels.textContent = active && active.previewSupported === false
     ? "Preview unavailable"
@@ -781,6 +950,9 @@ function renderDetails() {
   els.detailType.textContent = active ? active.type : "-";
   els.detailSize.textContent = active ? formatBytes(active.size) : "-";
   els.detailModified.textContent = active ? formatDate(active.modified) : "-";
+  els.detailPair.textContent = active?.pairInfo
+    ? `Using ${active.pairInfo.role.toUpperCase()} - RAW ${active.pairInfo.raw.name}, JPG ${active.pairInfo.jpg.name}`
+    : "-";
 }
 
 function renderViewState() {
@@ -810,6 +982,7 @@ function renderLibraryState() {
   const info = state.libraryInfo;
   const camera = info.camera;
   const enabled = Boolean(info.enabled);
+  const pairCounts = getPairCounts();
 
   els.homeStatus.textContent = info.status;
   els.homePath.textContent = info.homeFolder ? shortenPath(info.homeFolder) : "No folder set";
@@ -817,6 +990,12 @@ function renderLibraryState() {
   els.cameraStatus.textContent = camera ? "Detected" : info.cameraStatus;
   els.deleteCameraOriginalsToggle.checked = Boolean(info.deleteOriginals);
   els.deleteCameraOriginalsToggle.disabled = !enabled || info.importing;
+  els.pairRawJpgToggle.checked = Boolean(state.rawPairing.enabled);
+  els.rawPairDefaultSelect.value = state.rawPairing.defaultSide;
+  els.rawPairDefaultSelect.disabled = !state.rawPairing.enabled;
+  els.rawPairStatus.textContent = state.rawPairing.enabled
+    ? `${pairCounts.pairs} pair${pairCounts.pairs === 1 ? "" : "s"}`
+    : "Off";
 
   if (camera) {
     const count = `${camera.photoCount} photo file${camera.photoCount === 1 ? "" : "s"}`;
@@ -836,6 +1015,20 @@ function renderLibraryState() {
   els.scanCameraButton.disabled = !enabled || info.importing;
   els.importCameraButton.disabled = !enabled || !camera || !info.homeFolder || info.importing;
   els.ignoreCameraButton.disabled = !enabled || !camera || info.importing;
+}
+
+function updateRawPairing(patch) {
+  const active = getActive();
+  state.rawPairing = {
+    ...state.rawPairing,
+    ...patch,
+    defaultSide: patch.defaultSide === "raw" ? "raw" : patch.defaultSide === "jpg" ? "jpg" : state.rawPairing.defaultSide,
+  };
+  saveRawPairingSettings();
+  if (active) setActiveByImageId(active.id);
+  state.editHistory = [];
+  resetView(false);
+  render();
 }
 
 function renderUpdateState() {
@@ -1388,21 +1581,26 @@ async function applyEditsToLibrary() {
     sample: false,
   };
 
-  state.images.splice(state.activeIndex + 1, 0, editedImage);
-  state.activeIndex += 1;
+  const activeSourceIndexes = active.pairInfo
+    ? [active.pairInfo.raw, active.pairInfo.jpg].map((image) => state.images.indexOf(image)).filter((index) => index >= 0)
+    : [state.images.indexOf(active)].filter((index) => index >= 0);
+  const insertAt = activeSourceIndexes.length ? Math.max(...activeSourceIndexes) + 1 : state.images.length;
+  state.images.splice(insertAt, 0, editedImage);
+  setActiveByImageId(editedImage.id);
   state.editHistory = [];
   resetView(false);
   render();
 }
 
 async function autoBatchEdit() {
-  if (!state.images.length || state.batchRunning) return;
+  const images = getLibraryImages();
+  if (!images.length || state.batchRunning) return;
   setBatchRunning(true);
   state.editHistory = [];
   try {
-    const count = state.images.length;
+    const count = images.length;
     for (let index = 0; index < count; index += 1) {
-      const image = state.images[index];
+      const image = images[index];
       setBatchStatus(`Auto ${index + 1}/${count}`);
       ensureImageEdit(image);
       const autoEdit = await analyzeAutoEdit(image);
@@ -1425,8 +1623,9 @@ async function autoBatchEdit() {
 function matchBatchToCurrent() {
   const active = getActive();
   if (!active || state.batchRunning) return;
+  const images = getLibraryImages();
   const currentLook = adjustmentOnly(getEdit());
-  state.images.forEach((image) => {
+  images.forEach((image) => {
     ensureImageEdit(image);
     image.edit = {
       ...image.edit,
@@ -1436,15 +1635,16 @@ function matchBatchToCurrent() {
   });
   state.editHistory = [];
   render();
-  setBatchStatus(`${state.images.length} matched`);
+  setBatchStatus(`${images.length} matched`);
 }
 
 async function makeBatchCopies() {
-  if (!state.images.length || state.batchRunning) return;
+  const visibleImages = getLibraryImages();
+  if (!visibleImages.length || state.batchRunning) return;
   setBatchRunning(true);
   state.editHistory = [];
   try {
-    const originals = state.images.slice();
+    const originals = visibleImages.slice();
     const copies = [];
     for (let index = 0; index < originals.length; index += 1) {
       const image = originals[index];
@@ -1479,13 +1679,14 @@ async function makeBatchCopies() {
 }
 
 function resetBatchEdits() {
-  if (!state.images.length || state.batchRunning) return;
-  state.images.forEach((image) => {
+  const images = getLibraryImages();
+  if (!images.length || state.batchRunning) return;
+  images.forEach((image) => {
     image.edit = makeDefaultEdit();
   });
   state.editHistory = [];
   render();
-  setBatchStatus(`${state.images.length} reset`);
+  setBatchStatus(`${images.length} reset`);
 }
 
 async function analyzeAutoEdit(sourceImage) {
@@ -1838,8 +2039,9 @@ function renderHistogram() {
 }
 
 function updateButtons() {
-  const hasImages = state.images.length > 0;
-  const multi = state.images.length > 1;
+  const images = getLibraryImages();
+  const hasImages = images.length > 0;
+  const multi = images.length > 1;
   const disabled = !hasImages || state.batchRunning;
   [
     els.exportButton,
@@ -1874,7 +2076,7 @@ function updateButtons() {
 }
 
 function setActive(index) {
-  if (!state.images[index]) return;
+  if (!getLibraryImages()[index]) return;
   state.activeIndex = index;
   state.editHistory = [];
   resetView(false);
@@ -1882,16 +2084,21 @@ function setActive(index) {
 }
 
 function moveActive(delta) {
-  if (state.images.length < 2) return;
-  const next = (state.activeIndex + delta + state.images.length) % state.images.length;
+  const images = getLibraryImages();
+  if (images.length < 2) return;
+  const next = (state.activeIndex + delta + images.length) % images.length;
   setActive(next);
 }
 
 function removeActive() {
-  if (!getActive()) return;
-  state.images.splice(state.activeIndex, 1);
+  const active = getActive();
+  if (!active) return;
+  const removeIds = new Set(active.pairInfo
+    ? [active.pairInfo.raw.id, active.pairInfo.jpg.id]
+    : [active.id]);
+  state.images = state.images.filter((image) => !removeIds.has(image.id));
   if (!state.images.length) loadSampleAlbum();
-  state.activeIndex = Math.min(state.activeIndex, state.images.length - 1);
+  state.activeIndex = Math.min(state.activeIndex, getLibraryImages().length - 1);
   state.editHistory = [];
   resetView(false);
   render();
@@ -1939,7 +2146,7 @@ function rotateBy(degrees) {
 }
 
 function getActive() {
-  return state.images[state.activeIndex] || null;
+  return getLibraryImages()[state.activeIndex] || null;
 }
 
 function getFlipLabel() {

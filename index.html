@@ -125,6 +125,24 @@
                 </button>
               </div>
             </section>
+
+            <section class="libraryCard" aria-label="RAW and JPEG pairing">
+              <div class="paneHeader compact">
+                <h2>RAW + JPG</h2>
+                <span id="rawPairStatus">Pairing on</span>
+              </div>
+              <label class="toggleRow cameraDeleteRow">
+                <input id="pairRawJpgToggle" type="checkbox" checked />
+                <span>Pair matching RAW and JPG files</span>
+              </label>
+              <label class="settingRow">
+                <span>Default</span>
+                <select id="rawPairDefaultSelect" aria-label="Default file in RAW and JPG pairs">
+                  <option value="jpg">JPG view/edit</option>
+                  <option value="raw">RAW original</option>
+                </select>
+              </label>
+            </section>
           </div>
           <div class="thumbRail" id="thumbRail"></div>
         </aside>
@@ -351,6 +369,10 @@
                 <div>
                   <dt>Modified</dt>
                   <dd id="detailModified">-</dd>
+                </div>
+                <div>
+                  <dt>Pair</dt>
+                  <dd id="detailPair">-</dd>
                 </div>
               </dl>
             </section>

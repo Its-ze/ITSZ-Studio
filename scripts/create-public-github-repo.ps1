@@ -54,23 +54,27 @@ function Invoke-GitPushWithToken {
     [string]$Branch
   )
 
-  $askPass = Join-Path ([System.IO.Path]::GetTempPath()) "itsz-git-askpass-$PID.cmd"
+  $askPassCmd = Join-Path ([System.IO.Path]::GetTempPath()) "itsz-git-askpass-$PID.cmd"
+  $askPassPs1 = Join-Path ([System.IO.Path]::GetTempPath()) "itsz-git-askpass-$PID.ps1"
+  @'
+param([string]$Prompt)
+if ($Prompt -match "Username") {
+  [Console]::Out.WriteLine("x-access-token")
+} else {
+  [Console]::Out.WriteLine($env:ITSZ_GITHUB_TOKEN)
+}
+'@ | Set-Content -LiteralPath $askPassPs1 -Encoding UTF8
   @"
 @echo off
-echo %~1 | findstr /I "Username" >nul
-if not errorlevel 1 (
-  echo x-access-token
-  exit /b 0
-)
-echo %ITSZ_GITHUB_TOKEN%
-"@ | Set-Content -LiteralPath $askPass -Encoding ASCII
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$askPassPs1" "%~1"
+"@ | Set-Content -LiteralPath $askPassCmd -Encoding ASCII
 
   $oldAskPass = [Environment]::GetEnvironmentVariable("GIT_ASKPASS", "Process")
   $oldPrompt = [Environment]::GetEnvironmentVariable("GIT_TERMINAL_PROMPT", "Process")
   $oldToken = [Environment]::GetEnvironmentVariable("ITSZ_GITHUB_TOKEN", "Process")
 
   try {
-    [Environment]::SetEnvironmentVariable("GIT_ASKPASS", $askPass, "Process")
+    [Environment]::SetEnvironmentVariable("GIT_ASKPASS", $askPassCmd, "Process")
     [Environment]::SetEnvironmentVariable("GIT_TERMINAL_PROMPT", "0", "Process")
     [Environment]::SetEnvironmentVariable("ITSZ_GITHUB_TOKEN", $Token, "Process")
     Invoke-Git @("push", "-u", "origin", $Branch)
@@ -78,7 +82,35 @@ echo %ITSZ_GITHUB_TOKEN%
     [Environment]::SetEnvironmentVariable("GIT_ASKPASS", $oldAskPass, "Process")
     [Environment]::SetEnvironmentVariable("GIT_TERMINAL_PROMPT", $oldPrompt, "Process")
     [Environment]::SetEnvironmentVariable("ITSZ_GITHUB_TOKEN", $oldToken, "Process")
-    Remove-Item -LiteralPath $askPass -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $askPassCmd -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $askPassPs1 -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Ensure-GitHubPagesTagPolicy {
+  param(
+    [hashtable]$Headers,
+    [string]$RepoOwner,
+    [string]$RepoName
+  )
+
+  $policyUri = "https://api.github.com/repos/$RepoOwner/$RepoName/environments/github-pages/deployment-branch-policies"
+  try {
+    $policies = Invoke-RestMethod -Headers $Headers -Uri $policyUri
+    $hasReleaseTagPolicy = $policies.branch_policies | Where-Object { $_.name -eq "v*" -and $_.type -eq "tag" } | Select-Object -First 1
+    if ($hasReleaseTagPolicy) {
+      Write-Host "GitHub Pages already allows v* release tags."
+      return
+    }
+
+    $tagPolicyBody = @{
+      name = "v*"
+      type = "tag"
+    } | ConvertTo-Json
+    Invoke-RestMethod -Headers $Headers -Uri $policyUri -Method Post -Body $tagPolicyBody -ContentType "application/json" | Out-Null
+    Write-Host "Allowed v* release tags to deploy GitHub Pages."
+  } catch {
+    Write-Warning "Could not configure the GitHub Pages v* tag deployment policy. Add it in repository environment settings if tag releases cannot deploy Pages. Error: $($_.Exception.Message)"
   }
 }
 
@@ -161,6 +193,8 @@ try {
 } catch {
   Write-Warning "Could not enable GitHub Pages automatically. Enable Pages from repository settings if needed. Error: $($_.Exception.Message)"
 }
+
+Ensure-GitHubPagesTagPolicy -Headers $headers -RepoOwner $repoOwner -RepoName $repoName
 
 Write-Host "Created public repository: $($created.html_url)"
 Write-Host "Push a tag like v0.1.0 to build installers and publish the Pages download site."

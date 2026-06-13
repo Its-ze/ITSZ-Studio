@@ -1,0 +1,83 @@
+name: Release installers and Pages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            command: npm run dist:win
+          - os: ubuntu-latest
+            name: linux
+            command: npm run dist:linux
+    runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      RELEASE_VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run validate
+      - run: ${{ matrix.command }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: |
+            release/*.AppImage
+            release/*.blockmap
+            release/*.deb
+            release/*.exe
+            release/*.rpm
+            release/latest*.yml
+          if-no-files-found: error
+
+  pages:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: site/downloads/releases
+      - run: |
+          cp installers/windows/install-itsz-studio.ps1 site/downloads/install-windows.ps1
+          cp installers/linux/install-itsz-studio.sh site/downloads/install-linux.sh
+          cp assets/icon.svg site/icon.svg
+          cp assets/icon.png site/icon.png
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node scripts/prepare-pages.mjs
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          PAGES_BASE_URL: https://its-ze.github.io/ITSZ-Studio/downloads
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

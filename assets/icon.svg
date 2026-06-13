@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="ITSZ Studio icon">
+  <defs>
+    <linearGradient id="plate" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#17312c"/>
+      <stop offset="0.55" stop-color="#101412"/>
+      <stop offset="1" stop-color="#321d18"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="154" y1="140" x2="360" y2="364" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#39d8be"/>
+      <stop offset="0.5" stop-color="#f0bd49"/>
+      <stop offset="1" stop-color="#ff6b4a"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="#0c0d0c"/>
+  <rect x="42" y="42" width="428" height="428" rx="90" fill="url(#plate)" stroke="#50594f" stroke-width="8"/>
+  <path d="M122 170c0-28 22-50 50-50h168c28 0 50 22 50 50v178c0 28-22 50-50 50H172c-28 0-50-22-50-50V170z" fill="#151716" stroke="#f4f1e8" stroke-opacity=".16" stroke-width="10"/>
+  <path d="M154 188h204v38H154z" fill="#f4f1e8" opacity=".86"/>
+  <circle cx="256" cy="298" r="82" fill="#0c0d0c" stroke="url(#lens)" stroke-width="26"/>
+  <circle cx="256" cy="298" r="42" fill="url(#lens)"/>
+  <circle cx="292" cy="266" r="16" fill="#f4f1e8" opacity=".86"/>
+  <path d="M146 426h220" stroke="#39d8be" stroke-width="18" stroke-linecap="round"/>
+  <path d="M372 426h10" stroke="#ff6b4a" stroke-width="18" stroke-linecap="round"/>
+</svg>

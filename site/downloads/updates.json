@@ -1,0 +1,19 @@
+{
+  "app": "ITSZ's Studio",
+  "version": "0.1.0",
+  "generatedAt": "2026-06-13T00:00:00.000Z",
+  "updateFeed": "https://its-ze.github.io/ITSZ-Studio/downloads/",
+  "installers": {
+    "windows": {
+      "installer": "",
+      "portable": "",
+      "latest": ""
+    },
+    "linux": {
+      "appImage": "",
+      "deb": "",
+      "rpm": "",
+      "latest": ""
+    }
+  }
+}

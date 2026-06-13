@@ -1,0 +1,14 @@
+node_modules/
+.secrets/
+.env*
+release/
+dist/
+*.log
+.server.pid
+site/downloads/releases/
+site/downloads/*.exe
+site/downloads/*.AppImage
+site/downloads/*.deb
+site/downloads/*.rpm
+site/downloads/*.blockmap
+site/downloads/latest*.yml

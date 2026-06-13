@@ -1,0 +1,121 @@
+:root {
+  color-scheme: dark;
+  --bg: #0c0d0c;
+  --panel: #151716;
+  --line: #323833;
+  --text: #f4f1e8;
+  --muted: #aeb7ad;
+  --teal: #39d8be;
+  --gold: #f0bd49;
+  --coral: #ff6b4a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(145deg, #0a0b0a 0%, #111310 48%, #0d0d0c 100%);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.downloadShell {
+  width: min(920px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 48px 0;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+  padding-bottom: 26px;
+  border-bottom: 1px solid var(--line);
+}
+
+.hero img {
+  width: 112px;
+  height: 112px;
+  border-radius: 24px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2.1rem, 6vw, 4rem);
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+h2 {
+  margin-bottom: 12px;
+  font-size: 0.92rem;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+p {
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.downloads {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 28px 0;
+}
+
+.downloadButton {
+  display: grid;
+  place-items: center;
+  min-height: 58px;
+  border: 1px solid rgba(57, 216, 190, 0.5);
+  border-radius: 8px;
+  background: #142521;
+  color: var(--text);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.downloadButton:nth-child(2) {
+  border-color: rgba(240, 189, 73, 0.5);
+  background: #242014;
+}
+
+.commands,
+.releaseInfo {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+pre {
+  overflow-x: auto;
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: #090a09;
+}
+
+code {
+  color: #d8fff8;
+}
+
+@media (max-width: 620px) {
+  .hero,
+  .downloads {
+    grid-template-columns: 1fr;
+  }
+}

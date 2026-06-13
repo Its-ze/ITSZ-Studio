@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Download ITSZ's Studio</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="downloadShell">
+      <section class="hero">
+        <img src="./icon.png" alt="" />
+        <div>
+          <h1>ITSZ's Studio</h1>
+          <p>Photo viewer, editor, batch auto-enhancer, and denoise tool for Windows and Linux.</p>
+        </div>
+      </section>
+
+      <section class="downloads">
+        <a id="windowsDownload" class="downloadButton" href="./downloads/updates.json">Windows Installer</a>
+        <a id="linuxDownload" class="downloadButton" href="./downloads/updates.json">Linux Installer</a>
+      </section>
+
+      <section class="commands">
+        <h2>Install Scripts</h2>
+        <pre><code>powershell -ExecutionPolicy Bypass -File install-windows.ps1</code></pre>
+        <pre><code>curl -fsSL https://its-ze.github.io/ITSZ-Studio/downloads/install-linux.sh | bash</code></pre>
+      </section>
+
+      <section class="releaseInfo">
+        <h2 id="versionLabel">Latest version</h2>
+        <p id="releaseStatus">Loading release manifest...</p>
+      </section>
+    </main>
+    <script src="./site.js"></script>
+  </body>
+</html>

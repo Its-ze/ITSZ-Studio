@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ITSZ's Studio</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://unpkg.com/lucide@latest" defer></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <div class="appShell">
+      <header class="topBar">
+        <div class="brandBlock">
+          <div class="brandMark" aria-hidden="true">IS</div>
+          <div>
+            <h1>ITSZ's Studio</h1>
+            <p id="collectionStatus">Photo viewer</p>
+          </div>
+        </div>
+
+        <nav class="toolBar" aria-label="Studio tools">
+          <input id="fileInput" type="file" accept="image/*,.3fr,.arw,.cr2,.cr3,.crw,.dng,.erf,.fff,.heic,.heif,.hif,.iiq,.j2k,.jp2,.jxl,.kdc,.mef,.mos,.mrw,.nef,.nrw,.orf,.pef,.ptx,.raf,.raw,.rw2,.rwl,.sr2,.srf,.srw,.tif,.tiff,.x3f" multiple hidden />
+          <button class="toolButton primary" id="openButton" type="button" title="Open images" aria-label="Open images">
+            <i data-lucide="folder-open"></i>
+            <span>Open</span>
+          </button>
+          <button class="toolButton exportTop" id="exportButton" type="button" title="Save edited copy" aria-label="Save edited copy">
+            <i data-lucide="download"></i>
+            <span>Save Copy</span>
+          </button>
+          <div class="divider" aria-hidden="true"></div>
+          <button class="toolButton" id="previousButton" type="button" title="Previous image" aria-label="Previous image">
+            <i data-lucide="chevron-left"></i>
+          </button>
+          <button class="toolButton" id="nextButton" type="button" title="Next image" aria-label="Next image">
+            <i data-lucide="chevron-right"></i>
+          </button>
+          <div class="divider" aria-hidden="true"></div>
+          <button class="toolButton" id="zoomOutButton" type="button" title="Zoom out" aria-label="Zoom out">
+            <i data-lucide="zoom-out"></i>
+          </button>
+          <button class="toolButton" id="fitButton" type="button" title="Fit to screen" aria-label="Fit to screen">
+            <i data-lucide="maximize"></i>
+          </button>
+          <button class="toolButton" id="actualButton" type="button" title="Actual size" aria-label="Actual size">
+            <i data-lucide="scan"></i>
+          </button>
+          <button class="toolButton" id="zoomInButton" type="button" title="Zoom in" aria-label="Zoom in">
+            <i data-lucide="zoom-in"></i>
+          </button>
+          <div class="divider" aria-hidden="true"></div>
+          <button class="toolButton" id="rotateLeftButton" type="button" title="Rotate left" aria-label="Rotate left">
+            <i data-lucide="rotate-ccw"></i>
+          </button>
+          <button class="toolButton" id="rotateRightButton" type="button" title="Rotate right" aria-label="Rotate right">
+            <i data-lucide="rotate-cw"></i>
+          </button>
+          <button class="toolButton" id="flipHorizontalButton" type="button" title="Flip horizontal" aria-label="Flip horizontal">
+            <i data-lucide="flip-horizontal"></i>
+          </button>
+          <button class="toolButton" id="flipVerticalButton" type="button" title="Flip vertical" aria-label="Flip vertical">
+            <i data-lucide="flip-vertical"></i>
+          </button>
+          <button class="toolButton" id="resetButton" type="button" title="Reset view" aria-label="Reset view">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+          <button class="toolButton" id="undoEditButton" type="button" title="Undo edit" aria-label="Undo edit">
+            <i data-lucide="undo-2"></i>
+          </button>
+        </nav>
+      </header>
+
+      <main class="workspace">
+        <aside class="libraryPane" aria-label="Image library">
+          <div class="paneHeader">
+            <h2>Library</h2>
+            <span id="imageCount">0</span>
+          </div>
+          <div class="libraryTools">
+            <section class="libraryCard" aria-label="Home folder">
+              <div class="paneHeader compact">
+                <h2>Home Folder</h2>
+                <span id="homeStatus">Desktop app only</span>
+              </div>
+              <div class="libraryPath" id="homePath">No folder set</div>
+              <div class="libraryActions">
+                <button class="miniButton" id="setHomeButton" type="button">
+                  <i data-lucide="folder-plus"></i>
+                  <span>Set</span>
+                </button>
+                <button class="miniButton" id="loadHomeButton" type="button">
+                  <i data-lucide="images"></i>
+                  <span>Load</span>
+                </button>
+                <button class="miniButton" id="openHomeFolderButton" type="button">
+                  <i data-lucide="external-link"></i>
+                  <span>Open</span>
+                </button>
+              </div>
+            </section>
+
+            <section class="libraryCard" aria-label="Camera import">
+              <div class="paneHeader compact">
+                <h2>Camera</h2>
+                <span id="cameraStatus">Waiting</span>
+              </div>
+              <p class="libraryHint" id="cameraPrompt">Plug in a camera or SD card.</p>
+              <label class="toggleRow cameraDeleteRow">
+                <input id="deleteCameraOriginalsToggle" type="checkbox" />
+                <span>Delete originals after import</span>
+              </label>
+              <div class="libraryActions">
+                <button class="miniButton" id="scanCameraButton" type="button">
+                  <i data-lucide="scan-search"></i>
+                  <span>Scan</span>
+                </button>
+                <button class="miniButton primary" id="importCameraButton" type="button">
+                  <i data-lucide="import"></i>
+                  <span>Import</span>
+                </button>
+                <button class="miniButton" id="ignoreCameraButton" type="button">
+                  <i data-lucide="x"></i>
+                  <span>Ignore</span>
+                </button>
+              </div>
+            </section>
+          </div>
+          <div class="thumbRail" id="thumbRail"></div>
+        </aside>
+
+        <section class="stagePane" aria-label="Photo stage">
+          <div class="stageMeta">
+            <span id="activeName">No image</span>
+            <span id="activeZoom">100%</span>
+          </div>
+          <div class="stage" id="stage">
+            <img id="activeImage" alt="" draggable="false" />
+            <div class="cropOverlay" id="cropOverlay" aria-hidden="true">
+              <div class="cropFrame" id="cropFrame"></div>
+            </div>
+            <div class="vignetteOverlay" id="vignetteOverlay" aria-hidden="true"></div>
+            <div class="dropOverlay" id="dropOverlay">
+              <i data-lucide="images"></i>
+              <span>Drop photos</span>
+            </div>
+          </div>
+          <div class="filmstrip" id="filmstrip" aria-label="Filmstrip"></div>
+        </section>
+
+        <aside class="inspectorPane" aria-label="Image details">
+          <div class="paneHeader">
+            <h2>Tools</h2>
+            <button class="toolButton danger" id="removeButton" type="button" title="Remove from library" aria-label="Remove from library">
+              <i data-lucide="trash-2"></i>
+            </button>
+          </div>
+          <div class="sideScroll">
+            <section class="toolPanel" aria-label="Looks">
+              <div class="paneHeader compact">
+                <h2>Looks</h2>
+                <span id="editStatus">Original</span>
+              </div>
+              <div class="presetGrid" id="presetGrid">
+                <button class="presetButton" type="button" data-preset="natural">Natural</button>
+                <button class="presetButton" type="button" data-preset="auto">Auto</button>
+                <button class="presetButton" type="button" data-preset="vivid">Vivid</button>
+                <button class="presetButton" type="button" data-preset="bw">B&amp;W</button>
+                <button class="presetButton" type="button" data-preset="warm">Warm</button>
+                <button class="presetButton" type="button" data-preset="cool">Cool</button>
+              </div>
+            </section>
+
+            <section class="toolPanel" aria-label="Adjustments">
+              <div class="paneHeader compact">
+                <h2>Adjust</h2>
+                <div class="headerActions">
+                  <button class="miniButton" id="autoDenoiseButton" type="button">Auto Denoise</button>
+                  <button class="miniButton" id="resetEditsButton" type="button">Reset</button>
+                </div>
+              </div>
+              <div class="sliderList">
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Exposure</span>
+                    <output id="exposureValue">100</output>
+                  </span>
+                  <input id="exposureRange" type="range" min="50" max="150" value="100" data-edit-range="exposure" />
+                </label>
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Contrast</span>
+                    <output id="contrastValue">100</output>
+                  </span>
+                  <input id="contrastRange" type="range" min="50" max="160" value="100" data-edit-range="contrast" />
+                </label>
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Color</span>
+                    <output id="saturationValue">100</output>
+                  </span>
+                  <input id="saturationRange" type="range" min="0" max="200" value="100" data-edit-range="saturation" />
+                </label>
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Warmth</span>
+                    <output id="warmthValue">0</output>
+                  </span>
+                  <input id="warmthRange" type="range" min="-100" max="100" value="0" data-edit-range="warmth" />
+                </label>
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Tint</span>
+                    <output id="tintValue">0</output>
+                  </span>
+                  <input id="tintRange" type="range" min="-100" max="100" value="0" data-edit-range="tint" />
+                </label>
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Fade</span>
+                    <output id="fadeValue">0</output>
+                  </span>
+                  <input id="fadeRange" type="range" min="0" max="80" value="0" data-edit-range="fade" />
+                </label>
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Vignette</span>
+                    <output id="vignetteValue">0</output>
+                  </span>
+                  <input id="vignetteRange" type="range" min="0" max="80" value="0" data-edit-range="vignette" />
+                </label>
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Noise</span>
+                    <output id="denoiseValue">0</output>
+                  </span>
+                  <input id="denoiseRange" type="range" min="0" max="100" value="0" data-edit-range="denoise" />
+                </label>
+              </div>
+            </section>
+
+            <section class="toolPanel" aria-label="Crop">
+              <div class="paneHeader compact">
+                <h2>Crop</h2>
+                <button class="miniButton accent" id="applyEditButton" type="button">Apply</button>
+              </div>
+              <div class="cropGrid" id="cropGrid">
+                <button class="presetButton" type="button" data-crop="off">Off</button>
+                <button class="presetButton" type="button" data-crop="original">Original</button>
+                <button class="presetButton" type="button" data-crop="square">Square</button>
+                <button class="presetButton" type="button" data-crop="portrait">Portrait</button>
+                <button class="presetButton" type="button" data-crop="wide">Wide</button>
+              </div>
+              <div class="sliderList cropSliders">
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Size</span>
+                    <output id="cropSizeValue">100</output>
+                  </span>
+                  <input id="cropSizeRange" type="range" min="30" max="100" value="100" data-crop-range="size" />
+                </label>
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Move X</span>
+                    <output id="cropXValue">50</output>
+                  </span>
+                  <input id="cropXRange" type="range" min="0" max="100" value="50" data-crop-range="x" />
+                </label>
+                <label class="sliderRow">
+                  <span class="sliderTop">
+                    <span>Move Y</span>
+                    <output id="cropYValue">50</output>
+                  </span>
+                  <input id="cropYRange" type="range" min="0" max="100" value="50" data-crop-range="y" />
+                </label>
+              </div>
+            </section>
+
+            <section class="toolPanel" aria-label="Batch editing">
+              <div class="paneHeader compact">
+                <h2>Batch</h2>
+                <span id="batchStatus">Ready</span>
+              </div>
+              <div class="batchGrid">
+                <button class="batchButton primary" id="autoBatchButton" type="button">
+                  <i data-lucide="wand-sparkles"></i>
+                  <span>Auto All</span>
+                </button>
+                <button class="batchButton" id="matchBatchButton" type="button">
+                  <i data-lucide="copy-check"></i>
+                  <span>Match Look</span>
+                </button>
+                <button class="batchButton" id="copiesBatchButton" type="button">
+                  <i data-lucide="copy-plus"></i>
+                  <span>Make Copies</span>
+                </button>
+                <button class="batchButton danger" id="resetBatchButton" type="button">
+                  <i data-lucide="eraser"></i>
+                  <span>Reset All</span>
+                </button>
+              </div>
+            </section>
+
+            <section class="toolPanel" aria-label="Updates">
+              <div class="paneHeader compact">
+                <h2>Updates</h2>
+                <span id="updateStatus">Desktop app only</span>
+              </div>
+              <label class="toggleRow">
+                <input id="updateAutoCheckToggle" type="checkbox" />
+                <span>Auto check on launch</span>
+              </label>
+              <div class="updateGrid">
+                <button class="batchButton primary" id="checkUpdatesButton" type="button">
+                  <i data-lucide="refresh-cw"></i>
+                  <span>Check Now</span>
+                </button>
+                <button class="batchButton" id="downloadUpdateButton" type="button">
+                  <i data-lucide="download"></i>
+                  <span>Download</span>
+                </button>
+                <button class="batchButton" id="installUpdateButton" type="button">
+                  <i data-lucide="package-check"></i>
+                  <span>Install</span>
+                </button>
+              </div>
+              <p class="updateVersion" id="updateVersion">Installed version: web preview</p>
+            </section>
+
+            <section class="toolPanel" aria-label="Image details">
+              <div class="paneHeader compact">
+                <h2>Details</h2>
+              </div>
+              <dl class="detailsList">
+                <div>
+                  <dt>Name</dt>
+                  <dd id="detailName">-</dd>
+                </div>
+                <div>
+                  <dt>Pixels</dt>
+                  <dd id="detailPixels">-</dd>
+                </div>
+                <div>
+                  <dt>Type</dt>
+                  <dd id="detailType">-</dd>
+                </div>
+                <div>
+                  <dt>Size</dt>
+                  <dd id="detailSize">-</dd>
+                </div>
+                <div>
+                  <dt>Modified</dt>
+                  <dd id="detailModified">-</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="meterPanel" aria-label="Brightness histogram">
+              <div class="paneHeader compact">
+                <h2>Histogram</h2>
+                <span id="histogramPeak">-</span>
+              </div>
+              <canvas id="histogramCanvas" width="280" height="118"></canvas>
+            </section>
+
+            <section class="meterPanel" aria-label="View state">
+              <div class="paneHeader compact">
+                <h2>View</h2>
+              </div>
+              <div class="viewStats">
+                <span id="viewZoom">100%</span>
+                <span id="viewRotation">0 deg</span>
+                <span id="viewFlip">Normal</span>
+              </div>
+            </section>
+          </div>
+        </aside>
+      </main>
+    </div>
+  </body>
+</html>

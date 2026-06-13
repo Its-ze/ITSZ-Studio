@@ -101,10 +101,19 @@ $body = @{
   auto_init = $false
 } | ConvertTo-Json
 
-if ($Owner -eq $me.login) {
-  $created = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/user/repos" -Method Post -Body $body -ContentType "application/json"
-} else {
-  $created = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/orgs/$Owner/repos" -Method Post -Body $body -ContentType "application/json"
+try {
+  if ($Owner -eq $me.login) {
+    $created = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/user/repos" -Method Post -Body $body -ContentType "application/json"
+  } else {
+    $created = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/orgs/$Owner/repos" -Method Post -Body $body -ContentType "application/json"
+  }
+} catch {
+  $statusCode = $_.Exception.Response.StatusCode.value__
+  if ($statusCode -ne 422) {
+    throw
+  }
+  Write-Warning "Repository $Owner/$Repo already exists. Reusing it."
+  $created = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Owner/$Repo"
 }
 
 if (-not (Test-Path -LiteralPath ".git")) {
@@ -124,14 +133,14 @@ if ([string]::IsNullOrWhiteSpace($gitEmail)) {
 }
 
 Invoke-Git @("add", ".")
-Invoke-Git @("commit", "-m", "Initial ITSZ Studio desktop release scaffold")
-
-$remoteExists = $false
-& git remote get-url origin *> $null
-if ($LASTEXITCODE -eq 0) {
-  $remoteExists = $true
+$pendingChanges = & git status --porcelain
+if ($pendingChanges) {
+  Invoke-Git @("commit", "-m", "Update ITSZ Studio public release scaffold")
+} else {
+  Write-Host "No local changes to commit."
 }
 
+$remoteExists = (& git remote) -contains "origin"
 if ($remoteExists) {
   Invoke-Git @("remote", "set-url", "origin", $created.clone_url)
 } else {

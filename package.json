@@ -25,6 +25,7 @@
   "build": {
     "appId": "studio.itsz.desktop",
     "productName": "ITSZ's Studio",
+    "executableName": "ITSZ-Studio",
     "artifactName": "ITSZ-Studio-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release"

@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "description": "ITSZ's Studio photo viewer and editor.",
   "main": "desktop/main.js",
-  "author": "ITSZ",
+  "author": {
+    "name": "ITSZ",
+    "email": "itsz@users.noreply.github.com"
+  },
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",

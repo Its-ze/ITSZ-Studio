@@ -6,7 +6,9 @@ const fs = require("fs");
 const path = require("path");
 
 const UPDATE_URL = process.env.ITSZ_STUDIO_UPDATE_URL || "https://its-ze.github.io/ITSZ-Studio/downloads/";
-const CAMERA_POLL_MS = 6500;
+const CAMERA_POLL_MS = 15000;
+const PORTABLE_CAMERA_CACHE_MS = 120000;
+const PORTABLE_CAMERA_EMPTY_CACHE_MS = 15000;
 const PHOTO_EXTENSIONS = new Set([
   ".3fr", ".arw", ".avif", ".bmp", ".cr2", ".cr3", ".crw", ".dib", ".dng",
   ".erf", ".fff", ".gif", ".heic", ".heif", ".hif", ".iiq", ".j2k", ".jpe",
@@ -40,6 +42,7 @@ let cameraScanInFlight = false;
 let cameraDevices = new Map();
 let seenCameraIds = new Set();
 let ignoredCameraIds = new Set();
+let portableCameraCache = { scannedAt: 0, devices: [] };
 let updateState = {
   enabled: true,
   status: "Ready",
@@ -657,10 +660,24 @@ function portableDeviceId(shellPath) {
   return `wpd:${crypto.createHash("sha1").update(shellPath).digest("hex")}`;
 }
 
-async function listWindowsPortableCameras() {
+function cloneCameraDevice(device) {
+  return {
+    ...device,
+    sampleNames: Array.isArray(device.sampleNames) ? [...device.sampleNames] : [],
+    scanRoots: Array.isArray(device.scanRoots) ? [...device.scanRoots] : undefined,
+  };
+}
+
+async function listWindowsPortableCameras(options = {}) {
+  const now = Date.now();
+  const cacheMs = portableCameraCache.devices.length ? PORTABLE_CAMERA_CACHE_MS : PORTABLE_CAMERA_EMPTY_CACHE_MS;
+  if (!options.force && portableCameraCache.scannedAt && now - portableCameraCache.scannedAt < cacheMs) {
+    return portableCameraCache.devices.map(cloneCameraDevice);
+  }
+
   try {
     const devices = await runPowerShellScriptJson(WINDOWS_PORTABLE_CAMERA_LIST_SCRIPT, { timeout: 45000 });
-    return devices
+    const portableDevices = devices
       .filter((device) => device.shellPath && device.photoCount > 0)
       .map((device) => ({
         id: portableDeviceId(device.shellPath),
@@ -671,7 +688,13 @@ async function listWindowsPortableCameras() {
         photoCount: Number(device.photoCount) || 0,
         sampleNames: Array.isArray(device.sampleNames) ? device.sampleNames : [],
       }));
+    portableCameraCache = {
+      scannedAt: Date.now(),
+      devices: portableDevices.map(cloneCameraDevice),
+    };
+    return portableDevices;
   } catch {
+    portableCameraCache = { scannedAt: Date.now(), devices: [] };
     return [];
   }
 }
@@ -707,7 +730,7 @@ async function listMountedVolumes() {
   return listUnixVolumes();
 }
 
-async function scanCameraDevices() {
+async function scanCameraDevices(options = {}) {
   const volumes = await listMountedVolumes();
   const devices = [];
 
@@ -719,7 +742,7 @@ async function scanCameraDevices() {
   }
 
   if (process.platform === "win32") {
-    devices.push(...await listWindowsPortableCameras());
+    devices.push(...await listWindowsPortableCameras({ force: Boolean(options.forcePortableScan) }));
   }
 
   cameraDevices = new Map(devices.map((device) => [device.id, device]));
@@ -1018,7 +1041,7 @@ ipcMain.handle("library:set-delete-originals", (_event, deleteOriginals) => {
 });
 
 ipcMain.handle("library:scan-cameras", async () => {
-  const devices = await scanCameraDevices();
+  const devices = await scanCameraDevices({ forcePortableScan: true });
   return devices.map(publicCameraDevice);
 });
 

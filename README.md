@@ -6,7 +6,7 @@ Photo viewer and editor with local web preview, desktop packaging, batch tools, 
 
 - Open multiple local images with the toolbar or drag and drop.
 - Set a desktop home folder, load that folder into the library, and open it from the app.
-- Detect filesystem-mounted cameras, SD cards, and Windows MTP/PTP cameras such as the Canon EOS R8, then ask whether to import.
+- Detect filesystem-mounted cameras, SD cards, Windows MTP/PTP cameras, and Linux GVFS/gphoto2 cameras such as the Canon EOS R8, then ask whether to import.
 - Import camera photos into the home folder with an optional delete-originals-after-copy checkbox.
 - Pair matching RAW and JPG files in the library, with a saved default for which side is viewed and edited.
 - Recognizes common photo extensions including JPEG, PNG, WebP, AVIF, HEIC/HEIF, TIFF, DNG, CR2/CR3, NEF, ARW, RAF, ORF, RW2, and other camera RAW variants.
@@ -29,7 +29,7 @@ Open `index.html` directly in a browser.
 
 The app starts with generated sample images. Opening your own photos replaces those samples.
 
-Home-folder and camera import features run in the packaged desktop app because they need local filesystem access.
+Home-folder and camera import features run in the packaged desktop app because they need local filesystem access. On Linux, the installer also pulls in GVFS/gphoto2 camera helpers when the package manager supports them.
 
 ## Desktop Build
 

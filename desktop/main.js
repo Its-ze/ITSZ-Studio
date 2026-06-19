@@ -9,6 +9,8 @@ const UPDATE_URL = process.env.ITSZ_STUDIO_UPDATE_URL || "https://its-ze.github.
 const CAMERA_POLL_MS = 15000;
 const PORTABLE_CAMERA_CACHE_MS = 120000;
 const PORTABLE_CAMERA_EMPTY_CACHE_MS = 15000;
+const LINUX_GPHOTO_CACHE_MS = 120000;
+const LINUX_GPHOTO_EMPTY_CACHE_MS = 15000;
 const PHOTO_EXTENSIONS = new Set([
   ".3fr", ".arw", ".avif", ".bmp", ".cr2", ".cr3", ".crw", ".dib", ".dng",
   ".erf", ".fff", ".gif", ".heic", ".heif", ".hif", ".iiq", ".j2k", ".jpe",
@@ -43,6 +45,7 @@ let cameraDevices = new Map();
 let seenCameraIds = new Set();
 let ignoredCameraIds = new Set();
 let portableCameraCache = { scannedAt: 0, devices: [] };
+let linuxGphotoCameraCache = { scannedAt: 0, devices: [] };
 let updateState = {
   enabled: true,
   status: "Ready",
@@ -566,6 +569,7 @@ function buildCameraDevice(volume) {
 
   return {
     id: volume.id,
+    kind: volume.kind || "filesystem",
     name: volume.name || `Camera ${volume.root}`,
     root: volume.root,
     scanRoots,
@@ -641,6 +645,23 @@ function runPowerShellScriptJson(script, options = {}) {
   });
 }
 
+function runExecFile(command, args = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, {
+      windowsHide: true,
+      timeout: options.timeout || 30000,
+      maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        const message = (stderr || stdout || error.message || `${command} failed`).trim();
+        reject(new Error(message));
+        return;
+      }
+      resolve(stdout || "");
+    });
+  });
+}
+
 async function listWindowsVolumes() {
   const volumes = await runPowerShellJson("Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,VolumeName,FileSystem | ConvertTo-Json -Compress");
   return volumes
@@ -665,6 +686,7 @@ function cloneCameraDevice(device) {
     ...device,
     sampleNames: Array.isArray(device.sampleNames) ? [...device.sampleNames] : [],
     scanRoots: Array.isArray(device.scanRoots) ? [...device.scanRoots] : undefined,
+    gphotoFiles: Array.isArray(device.gphotoFiles) ? device.gphotoFiles.map((file) => ({ ...file })) : undefined,
   };
 }
 
@@ -703,6 +725,87 @@ function decodeMountPath(value) {
   return value.replace(/\\040/g, " ").replace(/\\011/g, "\t");
 }
 
+function safeDecodeUriPart(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function isLinuxGvfsCameraMountName(name) {
+  const lower = name.toLowerCase();
+  return lower.startsWith("gphoto2:") || lower.startsWith("mtp:") || lower.startsWith("ptp:");
+}
+
+function linuxGvfsCameraName(name) {
+  const decoded = safeDecodeUriPart(name);
+  if (decoded.startsWith("gphoto2:")) return `Camera ${decoded.replace(/^gphoto2:/, "").replace(/^host=/, "").trim()}`;
+  if (decoded.startsWith("mtp:")) return `MTP Camera ${decoded.replace(/^mtp:/, "").replace(/^host=/, "").trim()}`;
+  if (decoded.startsWith("ptp:")) return `PTP Camera ${decoded.replace(/^ptp:/, "").replace(/^host=/, "").trim()}`;
+  return "Linux Camera";
+}
+
+function linuxGvfsRoots() {
+  if (process.platform !== "linux") return [];
+  const roots = new Set();
+  if (process.env.XDG_RUNTIME_DIR) roots.add(path.join(process.env.XDG_RUNTIME_DIR, "gvfs"));
+  if (typeof process.getuid === "function") roots.add(`/run/user/${process.getuid()}/gvfs`);
+
+  try {
+    for (const entry of fs.readdirSync("/run/user", { withFileTypes: true })) {
+      if (entry.isDirectory()) roots.add(path.join("/run/user", entry.name, "gvfs"));
+    }
+  } catch {
+    // /run/user may not exist on every Unix-like desktop.
+  }
+
+  return Array.from(roots).filter((root) => {
+    try {
+      return fs.statSync(root).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
+function listLinuxGvfsVolumes() {
+  const volumes = [];
+  for (const gvfsRoot of linuxGvfsRoots()) {
+    let entries;
+    try {
+      entries = fs.readdirSync(gvfsRoot, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      if (!isLinuxGvfsCameraMountName(entry.name)) continue;
+      const root = path.join(gvfsRoot, entry.name);
+      volumes.push({
+        id: `linux-gvfs:${root}`,
+        kind: "gvfs",
+        root,
+        name: linuxGvfsCameraName(entry.name),
+        removable: true,
+        portable: true,
+      });
+    }
+  }
+  return volumes;
+}
+
+function dedupeVolumes(volumes) {
+  const seen = new Set();
+  return volumes.filter((volume) => {
+    const key = volume.root;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function listUnixVolumes() {
   let mounts = "";
   try {
@@ -725,8 +828,110 @@ function listUnixVolumes() {
     }));
 }
 
+function parseGphotoAutoDetect(stdout) {
+  const cameras = [];
+  let inRows = false;
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^-{3,}/.test(line)) {
+      inRows = true;
+      continue;
+    }
+    if (!inRows || /^Model\s+Port$/i.test(line)) continue;
+
+    const parts = line.split(/\s{2,}/).map((part) => part.trim()).filter(Boolean);
+    let model = parts[0] || "";
+    let port = parts[1] || "";
+    if (!port) {
+      const match = line.match(/^(.+?)\s+((?:usb|ptpip|disk|serial):\S+)$/i);
+      if (match) {
+        model = match[1].trim();
+        port = match[2].trim();
+      }
+    }
+    if (model && port) cameras.push({ model, port });
+  }
+  return cameras;
+}
+
+function parseGphotoFileList(stdout) {
+  const files = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = line.match(/^#(\d+)\s+(.+?)(?=\s{2,}\S|\s*$)/);
+    if (!match) continue;
+    files.push({
+      number: Number(match[1]),
+      name: match[2].trim(),
+    });
+  }
+  return files.filter((file) => Number.isFinite(file.number) && file.name && isPhotoPath(file.name));
+}
+
+function gphotoArgs(port, args) {
+  return port ? ["--port", port, ...args] : args;
+}
+
+async function listLinuxGphotoPhotoFiles(port) {
+  const stdout = await runExecFile("gphoto2", gphotoArgs(port, ["--list-files"]), { timeout: 45000 });
+  return parseGphotoFileList(stdout);
+}
+
+function linuxGphotoDeviceId(model, port) {
+  return `gphoto2:${crypto.createHash("sha1").update(`${model}\n${port}`).digest("hex")}`;
+}
+
+async function listLinuxGphotoCameras(options = {}) {
+  if (process.platform !== "linux") return [];
+  const now = Date.now();
+  const cacheMs = linuxGphotoCameraCache.devices.length ? LINUX_GPHOTO_CACHE_MS : LINUX_GPHOTO_EMPTY_CACHE_MS;
+  if (!options.force && linuxGphotoCameraCache.scannedAt && now - linuxGphotoCameraCache.scannedAt < cacheMs) {
+    return linuxGphotoCameraCache.devices.map(cloneCameraDevice);
+  }
+
+  try {
+    await runExecFile("gphoto2", ["--version"], { timeout: 5000 });
+  } catch {
+    linuxGphotoCameraCache = { scannedAt: Date.now(), devices: [] };
+    return [];
+  }
+
+  try {
+    const detected = parseGphotoAutoDetect(await runExecFile("gphoto2", ["--auto-detect"], { timeout: 12000 }));
+    const devices = [];
+    for (const camera of detected) {
+      let photoFiles = [];
+      try {
+        photoFiles = await listLinuxGphotoPhotoFiles(camera.port);
+      } catch {
+        photoFiles = [];
+      }
+      if (!photoFiles.length) continue;
+      devices.push({
+        id: linuxGphotoDeviceId(camera.model, camera.port),
+        kind: "gphoto2",
+        name: camera.model || "Linux Camera",
+        root: `gphoto2://${camera.port}`,
+        port: camera.port,
+        photoCount: photoFiles.length,
+        sampleNames: photoFiles.slice(0, 3).map((file) => file.name),
+        gphotoFiles: photoFiles.slice(0, 10000),
+      });
+    }
+    linuxGphotoCameraCache = {
+      scannedAt: Date.now(),
+      devices: devices.map(cloneCameraDevice),
+    };
+    return devices;
+  } catch {
+    linuxGphotoCameraCache = { scannedAt: Date.now(), devices: [] };
+    return [];
+  }
+}
+
 async function listMountedVolumes() {
   if (process.platform === "win32") return listWindowsVolumes();
+  if (process.platform === "linux") return dedupeVolumes([...listUnixVolumes(), ...listLinuxGvfsVolumes()]);
   return listUnixVolumes();
 }
 
@@ -743,6 +948,9 @@ async function scanCameraDevices(options = {}) {
 
   if (process.platform === "win32") {
     devices.push(...await listWindowsPortableCameras({ force: Boolean(options.forcePortableScan) }));
+  }
+  if (process.platform === "linux" && !devices.some((device) => device.kind === "gvfs")) {
+    devices.push(...await listLinuxGphotoCameras({ force: Boolean(options.forcePortableScan) }));
   }
 
   cameraDevices = new Map(devices.map((device) => [device.id, device]));
@@ -781,6 +989,12 @@ function startCameraWatcher() {
 
 function sanitizeSegment(value) {
   return String(value || "Camera").replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").replace(/\s+/g, " ").trim() || "Camera";
+}
+
+function sanitizeFileName(value) {
+  const fileName = path.basename(String(value || "photo"));
+  const safeName = fileName.replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").replace(/\s+/g, " ").trim();
+  return safeName && safeName !== "." && safeName !== ".." ? safeName : "photo";
 }
 
 function startsWithPath(childPath, parentPath) {
@@ -829,6 +1043,75 @@ async function importPortableCameraPhotos(device, settings, deleteOriginals) {
   };
 }
 
+async function importLinuxGphotoPhotos(device, settings, deleteOriginals) {
+  const date = new Date().toISOString().slice(0, 10);
+  const importRoot = path.join(settings.homeFolder, "Camera Imports", sanitizeSegment(device.name), date);
+  const failures = [];
+  const copiedPaths = [];
+  const copiedFileNumbers = new Set();
+  let deleted = 0;
+  let photoFiles = [];
+
+  try {
+    photoFiles = await listLinuxGphotoPhotoFiles(device.port);
+  } catch {
+    photoFiles = Array.isArray(device.gphotoFiles) ? device.gphotoFiles : [];
+  }
+  if (!photoFiles.length) {
+    throw new Error("No supported photo files were found on the camera.");
+  }
+
+  fs.mkdirSync(importRoot, { recursive: true });
+  for (const photo of photoFiles.slice(0, 10000)) {
+    try {
+      const destinationPath = uniqueDestinationPath(path.join(importRoot, sanitizeFileName(photo.name)));
+      await runExecFile("gphoto2", gphotoArgs(device.port, [
+        "--get-file",
+        String(photo.number),
+        "--filename",
+        destinationPath,
+      ]), { timeout: 3 * 60 * 1000 });
+      if (!fs.existsSync(destinationPath)) {
+        throw new Error("Camera download finished without creating the file.");
+      }
+      copiedPaths.push(destinationPath);
+      copiedFileNumbers.add(photo.number);
+    } catch (error) {
+      failures.push({
+        name: photo.name,
+        message: error.message || "Import failed",
+      });
+    }
+  }
+
+  if (deleteOriginals && copiedFileNumbers.size) {
+    const copiedPhotos = photoFiles
+      .filter((photo) => copiedFileNumbers.has(photo.number))
+      .sort((left, right) => right.number - left.number);
+
+    for (const photo of copiedPhotos) {
+      try {
+        await runExecFile("gphoto2", gphotoArgs(device.port, ["--delete-file", String(photo.number)]), { timeout: 60000 });
+        deleted += 1;
+      } catch (error) {
+        failures.push({
+          name: photo.name,
+          message: `Copied, but deleting the original failed: ${error.message || "delete failed"}`,
+        });
+      }
+    }
+  }
+
+  return {
+    copied: copiedPaths.length,
+    deleted,
+    failed: failures.length,
+    failures,
+    destination: importRoot,
+    records: copiedPaths.slice(0, 1000).map((filePath) => makePhotoRecord(filePath, importRoot)),
+  };
+}
+
 async function importCameraPhotos(deviceId, deleteOriginals) {
   const settings = readSettings();
   if (!settings.homeFolder) {
@@ -842,6 +1125,10 @@ async function importCameraPhotos(deviceId, deleteOriginals) {
 
   if (device.kind === "wpd") {
     return importPortableCameraPhotos(device, settings, deleteOriginals);
+  }
+
+  if (device.kind === "gphoto2") {
+    return importLinuxGphotoPhotos(device, settings, deleteOriginals);
   }
 
   if (!fs.existsSync(device.root)) {

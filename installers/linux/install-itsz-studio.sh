@@ -15,14 +15,18 @@ install_runtime_deps() {
     sudo apt-get install -y ca-certificates curl python3 libgtk-3-0 libnss3 libxss1 libasound2t64 xdg-utils || \
       sudo apt-get install -y ca-certificates curl python3 libgtk-3-0 libnss3 libxss1 libasound2 xdg-utils
     sudo apt-get install -y libfuse2 || true
+    sudo apt-get install -y gvfs-backends gvfs-fuse gphoto2 libglib2.0-bin || true
   elif need_cmd dnf; then
     sudo dnf install -y ca-certificates curl python3 gtk3 nss libXScrnSaver alsa-lib fuse-libs xdg-utils
+    sudo dnf install -y gvfs-gphoto2 gvfs-mtp gvfs-fuse gphoto2 glib2 || true
   elif need_cmd pacman; then
     sudo pacman -Sy --needed --noconfirm ca-certificates curl python gtk3 nss libxss alsa-lib fuse2 xdg-utils
+    sudo pacman -Sy --needed --noconfirm gvfs gvfs-gphoto2 gvfs-mtp gphoto2 glib2 || true
   elif need_cmd zypper; then
     sudo zypper --non-interactive install ca-certificates curl python3 gtk3 nss libXScrnSaver alsa libfuse2 xdg-utils
+    sudo zypper --non-interactive install gvfs-backends gvfs-fuse gphoto2 glib2-tools || true
   else
-    echo "Unsupported package manager. Install curl, python3, GTK3, NSS, XSS, ALSA, FUSE, and xdg-utils, then rerun." >&2
+    echo "Unsupported package manager. Install curl, python3, GTK3, NSS, XSS, ALSA, FUSE, xdg-utils, gvfs-backends, gvfs-fuse, and gphoto2, then rerun." >&2
     exit 1
   fi
 }

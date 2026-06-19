@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ITSZ's Studio</title>
+    <link rel="icon" href="./assets/icon.png" />
     <link rel="stylesheet" href="./styles.css" />
     <script src="https://unpkg.com/lucide@latest" defer></script>
     <script src="./app.js" defer></script>
@@ -19,8 +20,26 @@
           </div>
         </div>
 
+        <nav class="appMenu" aria-label="Application menu">
+          <button class="menuItem" type="button">File</button>
+          <button class="menuItem" type="button">Edit</button>
+          <button class="menuItem" type="button">Image</button>
+          <button class="menuItem" type="button">Layer</button>
+          <button class="menuItem" type="button">Select</button>
+          <button class="menuItem" type="button">Filter</button>
+          <button class="menuItem" type="button">View</button>
+          <button class="menuItem" type="button">Window</button>
+        </nav>
+
+        <div class="workspaceLabel">
+          <span>Classic</span>
+          <strong id="currentToolName">Move</strong>
+        </div>
+      </header>
+
+      <section class="optionsBar" aria-label="Tool options">
+        <input id="fileInput" type="file" accept="image/*,.3fr,.arw,.cr2,.cr3,.crw,.dng,.erf,.fff,.heic,.heif,.hif,.iiq,.j2k,.jp2,.jxl,.kdc,.mef,.mos,.mrw,.nef,.nrw,.orf,.pef,.ptx,.raf,.raw,.rw2,.rwl,.sr2,.srf,.srw,.tif,.tiff,.x3f" multiple hidden />
         <nav class="toolBar" aria-label="Studio tools">
-          <input id="fileInput" type="file" accept="image/*,.3fr,.arw,.cr2,.cr3,.crw,.dng,.erf,.fff,.heic,.heif,.hif,.iiq,.j2k,.jp2,.jxl,.kdc,.mef,.mos,.mrw,.nef,.nrw,.orf,.pef,.ptx,.raf,.raw,.rw2,.rwl,.sr2,.srf,.srw,.tif,.tiff,.x3f" multiple hidden />
           <button class="toolButton primary" id="openButton" type="button" title="Open images" aria-label="Open images">
             <i data-lucide="folder-open"></i>
             <span>Open</span>
@@ -69,9 +88,44 @@
             <i data-lucide="undo-2"></i>
           </button>
         </nav>
-      </header>
+        <div class="optionsGroup" aria-label="Active document">
+          <span class="optionLabel">Document</span>
+          <strong id="canvasStatus">No image</strong>
+        </div>
+      </section>
 
       <main class="workspace">
+        <aside class="toolPalette" aria-label="Tool palette">
+          <button class="paletteButton active" type="button" data-work-tool="move" title="Move tool" aria-label="Move tool">
+            <i data-lucide="mouse-pointer-2"></i>
+            <span>Move</span>
+          </button>
+          <button class="paletteButton" type="button" data-work-tool="hand" title="Hand tool" aria-label="Hand tool">
+            <i data-lucide="hand"></i>
+            <span>Hand</span>
+          </button>
+          <button class="paletteButton" type="button" data-work-tool="crop" title="Crop tool" aria-label="Crop tool">
+            <i data-lucide="crop"></i>
+            <span>Crop</span>
+          </button>
+          <button class="paletteButton" type="button" data-work-tool="auto" title="Auto adjust" aria-label="Auto adjust">
+            <i data-lucide="wand-sparkles"></i>
+            <span>Auto</span>
+          </button>
+          <button class="paletteButton" type="button" data-work-tool="denoise" title="Auto denoise" aria-label="Auto denoise">
+            <i data-lucide="sparkles"></i>
+            <span>Denoise</span>
+          </button>
+          <button class="paletteButton" type="button" data-work-tool="rotate" title="Rotate right" aria-label="Rotate right">
+            <i data-lucide="rotate-cw"></i>
+            <span>Rotate</span>
+          </button>
+          <button class="paletteButton" type="button" data-work-tool="export" title="Save edited copy" aria-label="Save edited copy">
+            <i data-lucide="download"></i>
+            <span>Save</span>
+          </button>
+        </aside>
+
         <aside class="libraryPane" aria-label="Image library">
           <div class="paneHeader">
             <h2>Library</h2>
@@ -148,19 +202,29 @@
         </aside>
 
         <section class="stagePane" aria-label="Photo stage">
+          <div class="documentTabs" aria-label="Open documents">
+            <button class="documentTab active" type="button">
+              <i data-lucide="file-image"></i>
+              <span id="documentTabName">No document</span>
+            </button>
+          </div>
           <div class="stageMeta">
             <span id="activeName">No image</span>
             <span id="activeZoom">100%</span>
           </div>
-          <div class="stage" id="stage">
-            <img id="activeImage" alt="" draggable="false" />
-            <div class="cropOverlay" id="cropOverlay" aria-hidden="true">
-              <div class="cropFrame" id="cropFrame"></div>
-            </div>
-            <div class="vignetteOverlay" id="vignetteOverlay" aria-hidden="true"></div>
-            <div class="dropOverlay" id="dropOverlay">
-              <i data-lucide="images"></i>
-              <span>Drop photos</span>
+          <div class="canvasDeck">
+            <div class="ruler rulerTop" aria-hidden="true"></div>
+            <div class="ruler rulerLeft" aria-hidden="true"></div>
+            <div class="stage" id="stage">
+              <img id="activeImage" alt="" draggable="false" />
+              <div class="cropOverlay" id="cropOverlay" aria-hidden="true">
+                <div class="cropFrame" id="cropFrame"></div>
+              </div>
+              <div class="vignetteOverlay" id="vignetteOverlay" aria-hidden="true"></div>
+              <div class="dropOverlay" id="dropOverlay">
+                <i data-lucide="images"></i>
+                <span>Drop photos</span>
+              </div>
             </div>
           </div>
           <div class="filmstrip" id="filmstrip" aria-label="Filmstrip"></div>
@@ -375,6 +439,22 @@
                   <dd id="detailPair">-</dd>
                 </div>
               </dl>
+            </section>
+
+            <section class="toolPanel" aria-label="Layers">
+              <div class="paneHeader compact">
+                <h2>Layers</h2>
+                <span id="layerStatus">1 layer</span>
+              </div>
+              <div class="layerList" id="layersList"></div>
+            </section>
+
+            <section class="toolPanel" aria-label="History">
+              <div class="paneHeader compact">
+                <h2>History</h2>
+                <span id="historyStatus">Current</span>
+              </div>
+              <div class="historyList" id="historyList"></div>
             </section>
 
             <section class="meterPanel" aria-label="Brightness histogram">

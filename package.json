@@ -1,6 +1,6 @@
 {
   "name": "itsz-studio",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "ITSZ's Studio photo viewer and editor.",
   "main": "desktop/main.js",
   "author": {

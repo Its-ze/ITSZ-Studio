@@ -123,6 +123,7 @@ const state = {
     enabled: true,
     defaultSide: "jpg",
   },
+  activeTool: "move",
   zoom: 1,
   rotation: 0,
   flipX: 1,
@@ -192,6 +193,10 @@ function bindElements() {
     cropButtons: Array.from(document.querySelectorAll("[data-crop]")),
     editRanges: Array.from(document.querySelectorAll("[data-edit-range]")),
     cropRanges: Array.from(document.querySelectorAll("[data-crop-range]")),
+    workspaceToolButtons: Array.from(document.querySelectorAll("[data-work-tool]")),
+    currentToolName: document.getElementById("currentToolName"),
+    canvasStatus: document.getElementById("canvasStatus"),
+    documentTabName: document.getElementById("documentTabName"),
     collectionStatus: document.getElementById("collectionStatus"),
     imageCount: document.getElementById("imageCount"),
     thumbRail: document.getElementById("thumbRail"),
@@ -228,6 +233,10 @@ function bindElements() {
     detailSize: document.getElementById("detailSize"),
     detailModified: document.getElementById("detailModified"),
     detailPair: document.getElementById("detailPair"),
+    layerStatus: document.getElementById("layerStatus"),
+    layersList: document.getElementById("layersList"),
+    historyStatus: document.getElementById("historyStatus"),
+    historyList: document.getElementById("historyList"),
     histogramCanvas: document.getElementById("histogramCanvas"),
     histogramPeak: document.getElementById("histogramPeak"),
     viewZoom: document.getElementById("viewZoom"),
@@ -310,6 +319,10 @@ function bindEvents() {
   els.installUpdateButton.addEventListener("click", installUpdate);
   els.updateAutoCheckToggle.addEventListener("change", () => {
     setUpdateAutoCheck(els.updateAutoCheckToggle.checked);
+  });
+
+  els.workspaceToolButtons.forEach((button) => {
+    button.addEventListener("click", () => activateWorkspaceTool(button.dataset.workTool));
   });
 
   els.presetButtons.forEach((button) => {
@@ -428,6 +441,9 @@ function bindEvents() {
     if (key === "+" || key === "=") zoomBy(1.14);
     if (key === "-") zoomBy(0.88);
     if (key === "0") resetView();
+    if (key === "v") setWorkspaceTool("move");
+    if (key === "h") setWorkspaceTool("hand");
+    if (key === "c") activateWorkspaceTool("crop");
   });
 
   window.addEventListener("resize", () => {
@@ -440,6 +456,35 @@ function endDrag(event) {
     state.dragging = false;
     state.dragStart = null;
     els.stage.classList.remove("dragging");
+  }
+}
+
+function setWorkspaceTool(tool) {
+  state.activeTool = tool || "move";
+  renderWorkspaceTool();
+}
+
+function activateWorkspaceTool(tool) {
+  if (!tool) return;
+  setWorkspaceTool(tool);
+  if (tool === "crop") {
+    if (getActive() && !getEdit().crop.enabled) setCropMode("original");
+    return;
+  }
+  if (tool === "auto") {
+    applyPreset("auto");
+    return;
+  }
+  if (tool === "denoise") {
+    autoDenoiseActive();
+    return;
+  }
+  if (tool === "rotate") {
+    rotateBy(90);
+    return;
+  }
+  if (tool === "export") {
+    saveEditedCopy();
   }
 }
 
@@ -869,6 +914,8 @@ function render() {
   renderBatchStatus();
   renderLibraryState();
   renderUpdateState();
+  renderStudioPanels();
+  renderWorkspaceTool();
   updateButtons();
 
   if (window.lucide) {
@@ -953,6 +1000,145 @@ function renderDetails() {
   els.detailPair.textContent = active?.pairInfo
     ? `Using ${active.pairInfo.role.toUpperCase()} - RAW ${active.pairInfo.raw.name}, JPG ${active.pairInfo.jpg.name}`
     : "-";
+  renderStudioPanels();
+}
+
+function renderStudioPanels() {
+  const active = getActive();
+  const edit = getEdit();
+  const activeName = active ? active.name : "No document";
+  const pixels = active?.previewSupported === false
+    ? "Preview unavailable"
+    : active?.width && active?.height ? `${active.width} x ${active.height}` : "-";
+  const edited = active && !isDefaultEdit(edit);
+
+  els.documentTabName.textContent = activeName;
+  els.canvasStatus.textContent = active
+    ? `${pixels} - ${normalizeRotation(state.rotation)} deg - ${edited ? "Edited" : "Original"}`
+    : "No image";
+
+  renderLayersPanel(active, edit);
+  renderHistoryPanel(active, edit);
+}
+
+function renderLayersPanel(active, edit) {
+  const rows = [];
+  if (active?.pairInfo) {
+    rows.push({
+      icon: "layers",
+      title: "RAW + JPG Pair",
+      meta: `Using ${active.pairInfo.role.toUpperCase()}`,
+      active: false,
+    });
+  }
+  rows.push({
+    icon: "image",
+    title: active ? "Background" : "Background",
+    meta: active ? active.name : "No image loaded",
+    active: Boolean(active),
+  });
+  if (active && !isDefaultEdit(edit)) {
+    rows.push({
+      icon: "sliders-horizontal",
+      title: "Adjustments",
+      meta: adjustmentSummary(edit),
+      active: true,
+    });
+  }
+  if (active && edit.crop.enabled) {
+    rows.push({
+      icon: "crop",
+      title: "Crop Mask",
+      meta: `${edit.crop.aspect}, ${edit.crop.size}%`,
+      active: true,
+    });
+  }
+
+  els.layerStatus.textContent = `${rows.length} layer${rows.length === 1 ? "" : "s"}`;
+  els.layersList.replaceChildren(...rows.map((row) => createPanelRow("layerRow", row)));
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function renderHistoryPanel(active, edit) {
+  const rows = [];
+  rows.push({
+    icon: "file-image",
+    title: active ? "Open Document" : "No Document",
+    meta: active ? active.name : "Empty workspace",
+    active: false,
+  });
+  if (active && state.editHistory.length) {
+    rows.push({
+      icon: "undo-2",
+      title: `${state.editHistory.length} Undo Step${state.editHistory.length === 1 ? "" : "s"}`,
+      meta: "Previous edit states",
+      active: false,
+    });
+  }
+  rows.push({
+    icon: edit.crop.enabled ? "crop" : "sliders-horizontal",
+    title: active && !isDefaultEdit(edit) ? "Current Edit" : "Current State",
+    meta: active ? adjustmentSummary(edit) : "Waiting for image",
+    active: Boolean(active),
+  });
+
+  els.historyStatus.textContent = active && state.editHistory.length ? `${state.editHistory.length} undo` : "Current";
+  els.historyList.replaceChildren(...rows.map((row) => createPanelRow("historyRow", row)));
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function createPanelRow(className, row) {
+  const element = document.createElement("div");
+  element.className = `${className}${row.active ? " active" : ""}`;
+
+  const visible = document.createElement("span");
+  visible.className = "visibilityDot";
+  visible.setAttribute("aria-hidden", "true");
+
+  const icon = document.createElement("i");
+  icon.setAttribute("data-lucide", row.icon);
+
+  const copy = document.createElement("span");
+  copy.className = "panelRowCopy";
+
+  const title = document.createElement("strong");
+  title.textContent = row.title;
+
+  const meta = document.createElement("small");
+  meta.textContent = row.meta;
+
+  copy.append(title, meta);
+  element.append(visible, icon, copy);
+  return element;
+}
+
+function adjustmentSummary(edit) {
+  const parts = [];
+  if (edit.exposure !== DEFAULT_EDIT.exposure) parts.push(`Exp ${edit.exposure}`);
+  if (edit.contrast !== DEFAULT_EDIT.contrast) parts.push(`Con ${edit.contrast}`);
+  if (edit.saturation !== DEFAULT_EDIT.saturation) parts.push(`Color ${edit.saturation}`);
+  if (edit.warmth !== DEFAULT_EDIT.warmth) parts.push(`Warm ${signedValue(edit.warmth)}`);
+  if (edit.tint !== DEFAULT_EDIT.tint) parts.push(`Tint ${signedValue(edit.tint)}`);
+  if (edit.denoise !== DEFAULT_EDIT.denoise) parts.push(`Noise ${edit.denoise}`);
+  if (edit.crop.enabled) parts.push(`Crop ${edit.crop.aspect}`);
+  return parts.length ? parts.slice(0, 3).join(" / ") : "Original";
+}
+
+function renderWorkspaceTool() {
+  const labels = {
+    move: "Move",
+    hand: "Hand",
+    crop: "Crop",
+    auto: "Auto Adjust",
+    denoise: "Denoise",
+    rotate: "Rotate",
+    export: "Save Copy",
+  };
+  els.currentToolName.textContent = labels[state.activeTool] || "Move";
+  els.workspaceToolButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.workTool === state.activeTool);
+  });
+  els.stage.classList.toggle("handTool", state.activeTool === "hand");
 }
 
 function renderViewState() {
@@ -962,6 +1148,7 @@ function renderViewState() {
   els.viewZoom.textContent = zoom;
   els.viewRotation.textContent = `${normalizeRotation(state.rotation)} deg`;
   els.viewFlip.textContent = getFlipLabel();
+  renderStudioPanels();
 }
 
 function renderEditState() {
@@ -971,6 +1158,7 @@ function renderEditState() {
   els.vignetteOverlay.style.opacity = active ? String(edit.vignette / 100) : "0";
   renderEditControls(edit);
   renderCropOverlay(edit);
+  renderStudioPanels();
   updateButtons();
 }
 
@@ -1525,9 +1713,11 @@ function setCropMode(mode) {
         enabled: false,
       },
     });
+    if (state.activeTool === "crop") setWorkspaceTool("move");
     return;
   }
 
+  setWorkspaceTool("crop");
   setEditPatch({
     crop: {
       ...edit.crop,
@@ -2069,6 +2259,9 @@ function updateButtons() {
   });
   [...els.presetButtons, ...els.cropButtons, ...els.editRanges, ...els.cropRanges].forEach((control) => {
     control.disabled = disabled;
+  });
+  els.workspaceToolButtons.forEach((button) => {
+    button.disabled = state.batchRunning || (!hasImages && button.dataset.workTool !== "open");
   });
   els.previousButton.disabled = disabled || !multi;
   els.nextButton.disabled = disabled || !multi;

@@ -120,6 +120,9 @@ const state = {
     homeFolder: "",
     status: "Desktop app only",
     deleteOriginals: false,
+    autoSortImports: false,
+    autoSortAsk: true,
+    autoSortStatus: "Off",
     camera: null,
     cameraStatus: "Desktop app only",
     importing: false,
@@ -204,6 +207,10 @@ function bindElements() {
     importCameraButton: document.getElementById("importCameraButton"),
     ignoreCameraButton: document.getElementById("ignoreCameraButton"),
     deleteCameraOriginalsToggle: document.getElementById("deleteCameraOriginalsToggle"),
+    autoSortImportsToggle: document.getElementById("autoSortImportsToggle"),
+    autoSortAskToggle: document.getElementById("autoSortAskToggle"),
+    autoSortStatus: document.getElementById("autoSortStatus"),
+    autoSortHint: document.getElementById("autoSortHint"),
     pairRawJpgToggle: document.getElementById("pairRawJpgToggle"),
     rawPairDefaultSelect: document.getElementById("rawPairDefaultSelect"),
     rawPairStatus: document.getElementById("rawPairStatus"),
@@ -390,6 +397,16 @@ function bindEvents() {
   els.ignoreCameraButton.addEventListener("click", ignoreDetectedCamera);
   els.deleteCameraOriginalsToggle.addEventListener("change", () => {
     setDeleteCameraOriginals(els.deleteCameraOriginalsToggle.checked);
+  });
+  els.autoSortImportsToggle.addEventListener("change", () => {
+    setAutoSortImports({
+      autoSortImports: els.autoSortImportsToggle.checked,
+    });
+  });
+  els.autoSortAskToggle.addEventListener("change", () => {
+    setAutoSortImports({
+      autoSortAsk: els.autoSortAskToggle.checked,
+    });
   });
   els.pairRawJpgToggle.addEventListener("change", () => {
     updateRawPairing({
@@ -1488,6 +1505,18 @@ function renderLibraryState() {
   els.cameraStatus.textContent = camera ? "Detected" : info.cameraStatus;
   els.deleteCameraOriginalsToggle.checked = Boolean(info.deleteOriginals);
   els.deleteCameraOriginalsToggle.disabled = !enabled || info.importing;
+  els.autoSortImportsToggle.checked = Boolean(info.autoSortImports);
+  els.autoSortAskToggle.checked = Boolean(info.autoSortAsk);
+  els.autoSortImportsToggle.disabled = !enabled || info.importing;
+  els.autoSortAskToggle.disabled = !enabled || info.importing || !info.autoSortImports;
+  els.autoSortStatus.textContent = info.autoSortImports ? "Approved" : "Off";
+  els.autoSortHint.textContent = info.autoSortImports
+    ? info.autoSortAsk
+      ? "Imports ask first, then sort into RAW, JPG, PNG, TIFF, HEIC, and Other Photos."
+      : "Approved imports sort directly into RAW, JPG, PNG, TIFF, HEIC, and Other Photos."
+    : enabled
+    ? "Turn on sorting to organize approved imports by file type."
+    : "Auto sorting runs in the desktop app.";
   els.pairRawJpgToggle.checked = Boolean(state.rawPairing.enabled);
   els.rawPairDefaultSelect.value = state.rawPairing.defaultSide;
   els.rawPairDefaultSelect.disabled = !state.rawPairing.enabled;
@@ -1770,6 +1799,38 @@ async function setDeleteCameraOriginals(deleteOriginals) {
   renderLibraryState();
 }
 
+async function setAutoSortImports(patch) {
+  if (!window.itszLibrary) return;
+  state.libraryInfo = {
+    ...state.libraryInfo,
+    ...patch,
+    autoSortImports: typeof patch.autoSortImports === "boolean" ? patch.autoSortImports : state.libraryInfo.autoSortImports,
+    autoSortAsk: typeof patch.autoSortAsk === "boolean" ? patch.autoSortAsk : state.libraryInfo.autoSortAsk,
+  };
+  renderLibraryState();
+  try {
+    const info = await window.itszLibrary.setAutoSort({
+      autoSortImports: state.libraryInfo.autoSortImports,
+      autoSortAsk: state.libraryInfo.autoSortAsk,
+    });
+    state.libraryInfo = {
+      ...state.libraryInfo,
+      ...info,
+      enabled: true,
+    };
+  } catch (error) {
+    console.error(error);
+    state.libraryInfo.status = "Sort setting failed";
+  }
+  renderLibraryState();
+}
+
+function getAutoSortApproval(actionLabel) {
+  if (!state.libraryInfo.autoSortImports) return false;
+  if (!state.libraryInfo.autoSortAsk) return true;
+  return window.confirm(`Sort this ${actionLabel} into RAW, JPG, and other photo-type folders after import?`);
+}
+
 async function ignoreDetectedCamera() {
   if (!window.itszLibrary || !state.libraryInfo.camera) return;
   const cameraId = state.libraryInfo.camera.id;
@@ -1792,13 +1853,16 @@ async function importDetectedCamera() {
   renderLibraryState();
 
   try {
+    const autoSortApproved = getAutoSortApproval("camera import");
     const result = await window.itszLibrary.importCamera({
       deviceId: state.libraryInfo.camera.id,
       deleteOriginals: state.libraryInfo.deleteOriginals,
+      autoSortApproved,
     });
     const deleteText = result.deleted ? `, deleted ${result.deleted}` : "";
+    const sortText = result.sorted ? `, sorted ${result.sorted}` : "";
     const failText = result.failed ? `, ${result.failed} failed` : "";
-    state.libraryInfo.status = `Imported ${result.copied}${deleteText}${failText}`;
+    state.libraryInfo.status = `Imported ${result.copied}${sortText}${deleteText}${failText}`;
     state.libraryInfo.cameraStatus = "Imported";
     state.libraryInfo.camera = null;
     await importDesktopRecords(result.records || []);

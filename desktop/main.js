@@ -18,6 +18,14 @@ const PHOTO_EXTENSIONS = new Set([
   ".nef", ".nrw", ".orf", ".pef", ".png", ".ptx", ".raf", ".raw", ".rw2",
   ".rwl", ".sr2", ".srf", ".srw", ".svg", ".tif", ".tiff", ".webp", ".x3f",
 ]);
+const JPEG_EXTENSIONS = new Set([".jpe", ".jpeg", ".jpg"]);
+const RAW_EXTENSIONS = new Set([
+  ".3fr", ".arw", ".cr2", ".cr3", ".crw", ".dng", ".erf", ".fff", ".hif",
+  ".iiq", ".kdc", ".mef", ".mos", ".mrw", ".nef", ".nrw", ".orf", ".pef",
+  ".ptx", ".raf", ".raw", ".rw2", ".rwl", ".sr2", ".srf", ".srw", ".x3f",
+]);
+const TIFF_EXTENSIONS = new Set([".tif", ".tiff"]);
+const HEIC_EXTENSIONS = new Set([".heic", ".heif", ".hif"]);
 const PREVIEW_EXTENSIONS = new Set([".avif", ".bmp", ".dib", ".gif", ".jpe", ".jpeg", ".jpg", ".png", ".svg", ".webp"]);
 const MIME_BY_EXT = new Map([
   [".avif", "image/avif"],
@@ -61,6 +69,8 @@ function defaultSettings() {
     updateUrl: UPDATE_URL,
     homeFolder: "",
     deleteCameraOriginals: false,
+    autoSortImports: false,
+    autoSortAsk: true,
   };
 }
 
@@ -1017,7 +1027,77 @@ function uniqueDestinationPath(destinationPath) {
   return next;
 }
 
-async function importPortableCameraPhotos(device, settings, deleteOriginals) {
+function sortFolderForPhoto(filePath) {
+  const extension = extensionFor(filePath);
+  if (RAW_EXTENSIONS.has(extension)) return "RAW";
+  if (JPEG_EXTENSIONS.has(extension)) return "JPG";
+  if (extension === ".png") return "PNG";
+  if (TIFF_EXTENSIONS.has(extension)) return "TIFF";
+  if (HEIC_EXTENSIONS.has(extension)) return "HEIC";
+  if (extension === ".webp") return "WEBP";
+  if (extension === ".gif") return "GIF";
+  return "Other Photos";
+}
+
+function sortImportPathForPhoto(importRoot, fileName) {
+  return path.join(importRoot, sortFolderForPhoto(fileName), sanitizeFileName(path.basename(fileName)));
+}
+
+function maybeSortedDestinationPath(importRoot, fileName, autoSortApproved) {
+  if (!autoSortApproved) return path.join(importRoot, sanitizeFileName(path.basename(fileName)));
+  return sortImportPathForPhoto(importRoot, fileName);
+}
+
+function sortCopiedImportPaths(copiedPaths, importRoot, autoSortApproved) {
+  if (!autoSortApproved) {
+    return {
+      copiedPaths,
+      sorted: 0,
+      sortFolders: [],
+      sortFailures: [],
+    };
+  }
+
+  const sortedPaths = [];
+  const sortFolders = new Set();
+  const sortFailures = [];
+  let sorted = 0;
+
+  for (const filePath of copiedPaths) {
+    try {
+      if (!isPhotoPath(filePath) || !fs.existsSync(filePath)) {
+        sortedPaths.push(filePath);
+        continue;
+      }
+
+      const folder = sortFolderForPhoto(filePath);
+      const destinationPath = uniqueDestinationPath(path.join(importRoot, folder, sanitizeFileName(path.basename(filePath))));
+      fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+
+      if (path.resolve(filePath) !== path.resolve(destinationPath)) {
+        fs.renameSync(filePath, destinationPath);
+        sorted += 1;
+      }
+      sortFolders.add(folder);
+      sortedPaths.push(destinationPath);
+    } catch (error) {
+      sortedPaths.push(filePath);
+      sortFailures.push({
+        name: path.basename(filePath),
+        message: `Copied, but sorting failed: ${error.message || "sort failed"}`,
+      });
+    }
+  }
+
+  return {
+    copiedPaths: sortedPaths,
+    sorted,
+    sortFolders: Array.from(sortFolders).sort((left, right) => left.localeCompare(right)),
+    sortFailures,
+  };
+}
+
+async function importPortableCameraPhotos(device, settings, deleteOriginals, autoSortApproved) {
   const date = new Date().toISOString().slice(0, 10);
   const importRoot = path.join(settings.homeFolder, "Camera Imports", sanitizeSegment(device.name), date);
   const result = await runPowerShellScriptJson(WINDOWS_PORTABLE_CAMERA_IMPORT_SCRIPT, {
@@ -1032,18 +1112,27 @@ async function importPortableCameraPhotos(device, settings, deleteOriginals) {
     },
   });
   const copiedPaths = Array.isArray(result.copiedPaths) ? result.copiedPaths : [];
+  const sortedResult = sortCopiedImportPaths(copiedPaths, importRoot, autoSortApproved);
+  const importFailures = Array.isArray(result.failures) ? result.failures : [];
+  const failures = [
+    ...importFailures,
+    ...sortedResult.sortFailures,
+  ];
+  const importFailed = Number(result.failed) || importFailures.length;
 
   return {
-    copied: Number(result.copied) || copiedPaths.length,
+    copied: Number(result.copied) || sortedResult.copiedPaths.length,
+    sorted: sortedResult.sorted,
+    sortFolders: sortedResult.sortFolders,
     deleted: Number(result.deleted) || 0,
-    failed: Number(result.failed) || 0,
-    failures: Array.isArray(result.failures) ? result.failures : [],
+    failed: importFailed + sortedResult.sortFailures.length,
+    failures,
     destination: importRoot,
-    records: copiedPaths.slice(0, 1000).map((filePath) => makePhotoRecord(filePath, importRoot)),
+    records: sortedResult.copiedPaths.slice(0, 1000).map((filePath) => makePhotoRecord(filePath, importRoot)),
   };
 }
 
-async function importLinuxGphotoPhotos(device, settings, deleteOriginals) {
+async function importLinuxGphotoPhotos(device, settings, deleteOriginals, autoSortApproved) {
   const date = new Date().toISOString().slice(0, 10);
   const importRoot = path.join(settings.homeFolder, "Camera Imports", sanitizeSegment(device.name), date);
   const failures = [];
@@ -1064,7 +1153,7 @@ async function importLinuxGphotoPhotos(device, settings, deleteOriginals) {
   fs.mkdirSync(importRoot, { recursive: true });
   for (const photo of photoFiles.slice(0, 10000)) {
     try {
-      const destinationPath = uniqueDestinationPath(path.join(importRoot, sanitizeFileName(photo.name)));
+      const destinationPath = uniqueDestinationPath(maybeSortedDestinationPath(importRoot, photo.name, autoSortApproved));
       await runExecFile("gphoto2", gphotoArgs(device.port, [
         "--get-file",
         String(photo.number),
@@ -1104,6 +1193,10 @@ async function importLinuxGphotoPhotos(device, settings, deleteOriginals) {
 
   return {
     copied: copiedPaths.length,
+    sorted: autoSortApproved ? copiedPaths.length : 0,
+    sortFolders: autoSortApproved
+      ? Array.from(new Set(copiedPaths.map(sortFolderForPhoto))).sort((left, right) => left.localeCompare(right))
+      : [],
     deleted,
     failed: failures.length,
     failures,
@@ -1112,8 +1205,10 @@ async function importLinuxGphotoPhotos(device, settings, deleteOriginals) {
   };
 }
 
-async function importCameraPhotos(deviceId, deleteOriginals) {
+async function importCameraPhotos(deviceId, options = {}) {
   const settings = readSettings();
+  const deleteOriginals = Boolean(options.deleteOriginals);
+  const autoSortApproved = Boolean(settings.autoSortImports && options.autoSortApproved);
   if (!settings.homeFolder) {
     throw new Error("Set a home folder before importing from a camera.");
   }
@@ -1124,11 +1219,11 @@ async function importCameraPhotos(deviceId, deleteOriginals) {
   }
 
   if (device.kind === "wpd") {
-    return importPortableCameraPhotos(device, settings, deleteOriginals);
+    return importPortableCameraPhotos(device, settings, deleteOriginals, autoSortApproved);
   }
 
   if (device.kind === "gphoto2") {
-    return importLinuxGphotoPhotos(device, settings, deleteOriginals);
+    return importLinuxGphotoPhotos(device, settings, deleteOriginals, autoSortApproved);
   }
 
   if (!fs.existsSync(device.root)) {
@@ -1150,7 +1245,9 @@ async function importCameraPhotos(deviceId, deleteOriginals) {
     try {
       const relative = path.relative(device.root, sourcePath);
       if (relative.startsWith("..")) continue;
-      const destinationPath = uniqueDestinationPath(path.join(importRoot, relative));
+      const destinationPath = autoSortApproved
+        ? uniqueDestinationPath(sortImportPathForPhoto(importRoot, sourcePath))
+        : uniqueDestinationPath(path.join(importRoot, relative));
       fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
       fs.copyFileSync(sourcePath, destinationPath);
 
@@ -1175,6 +1272,10 @@ async function importCameraPhotos(deviceId, deleteOriginals) {
 
   return {
     copied: copiedPaths.length,
+    sorted: autoSortApproved ? copiedPaths.length : 0,
+    sortFolders: autoSortApproved
+      ? Array.from(new Set(copiedPaths.map(sortFolderForPhoto))).sort((left, right) => left.localeCompare(right))
+      : [],
     deleted,
     failed: failures.length,
     failures,
@@ -1267,6 +1368,9 @@ ipcMain.handle("library:get-info", () => {
     enabled: true,
     homeFolder: settings.homeFolder,
     deleteOriginals: Boolean(settings.deleteCameraOriginals),
+    autoSortImports: Boolean(settings.autoSortImports),
+    autoSortAsk: settings.autoSortAsk !== false,
+    autoSortStatus: settings.autoSortImports ? "Approved" : "Off",
     status: settings.homeFolder ? "Home ready" : "Set a home folder",
   };
 });
@@ -1284,6 +1388,9 @@ ipcMain.handle("library:choose-home-folder", async () => {
       enabled: true,
       homeFolder: settings.homeFolder,
       deleteOriginals: Boolean(settings.deleteCameraOriginals),
+      autoSortImports: Boolean(settings.autoSortImports),
+      autoSortAsk: settings.autoSortAsk !== false,
+      autoSortStatus: settings.autoSortImports ? "Approved" : "Off",
       status: settings.homeFolder ? "Home ready" : "Set a home folder",
     };
   }
@@ -1293,6 +1400,9 @@ ipcMain.handle("library:choose-home-folder", async () => {
     enabled: true,
     homeFolder: next.homeFolder,
     deleteOriginals: Boolean(next.deleteCameraOriginals),
+    autoSortImports: Boolean(next.autoSortImports),
+    autoSortAsk: next.autoSortAsk !== false,
+    autoSortStatus: next.autoSortImports ? "Approved" : "Off",
     status: "Home folder set",
   };
 });
@@ -1323,7 +1433,26 @@ ipcMain.handle("library:set-delete-originals", (_event, deleteOriginals) => {
     enabled: true,
     homeFolder: next.homeFolder,
     deleteOriginals: Boolean(next.deleteCameraOriginals),
+    autoSortImports: Boolean(next.autoSortImports),
+    autoSortAsk: next.autoSortAsk !== false,
+    autoSortStatus: next.autoSortImports ? "Approved" : "Off",
     status: next.deleteCameraOriginals ? "Delete after import on" : "Keep camera originals",
+  };
+});
+
+ipcMain.handle("library:set-auto-sort", (_event, options = {}) => {
+  const next = updateSettings({
+    autoSortImports: Boolean(options.autoSortImports),
+    autoSortAsk: options.autoSortAsk !== false,
+  });
+  return {
+    enabled: true,
+    homeFolder: next.homeFolder,
+    deleteOriginals: Boolean(next.deleteCameraOriginals),
+    autoSortImports: Boolean(next.autoSortImports),
+    autoSortAsk: next.autoSortAsk !== false,
+    autoSortStatus: next.autoSortImports ? "Approved" : "Off",
+    status: next.autoSortImports ? "Auto sort ready" : "Auto sort off",
   };
 });
 
@@ -1338,7 +1467,10 @@ ipcMain.handle("library:ignore-camera", (_event, deviceId) => {
 });
 
 ipcMain.handle("library:import-camera", (_event, options = {}) => {
-  return importCameraPhotos(options.deviceId, Boolean(options.deleteOriginals));
+  return importCameraPhotos(options.deviceId, {
+    deleteOriginals: Boolean(options.deleteOriginals),
+    autoSortApproved: Boolean(options.autoSortApproved),
+  });
 });
 
 app.whenReady().then(() => {

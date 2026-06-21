@@ -19,11 +19,16 @@ contextBridge.exposeInMainWorld("itszLibrary", {
   openHomeFolder: () => ipcRenderer.invoke("library:open-home-folder"),
   loadHomeFolder: () => ipcRenderer.invoke("library:load-home-folder"),
   setDeleteOriginals: (deleteOriginals) => ipcRenderer.invoke("library:set-delete-originals", Boolean(deleteOriginals)),
+  setAutoSort: (options) => ipcRenderer.invoke("library:set-auto-sort", {
+    autoSortImports: Boolean(options?.autoSortImports),
+    autoSortAsk: options?.autoSortAsk !== false,
+  }),
   scanCameras: () => ipcRenderer.invoke("library:scan-cameras"),
   ignoreCamera: (deviceId) => ipcRenderer.invoke("library:ignore-camera", deviceId),
   importCamera: (options) => ipcRenderer.invoke("library:import-camera", {
     deviceId: options?.deviceId || "",
     deleteOriginals: Boolean(options?.deleteOriginals),
+    autoSortApproved: Boolean(options?.autoSortApproved),
   }),
   onCameraDetected: (callback) => {
     const listener = (_event, camera) => callback(camera);

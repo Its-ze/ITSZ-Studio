@@ -197,6 +197,58 @@
                 </select>
               </label>
             </section>
+
+            <section class="libraryCard galleryCard" aria-label="Gallery controls">
+              <div class="paneHeader compact">
+                <h2>Gallery</h2>
+                <span id="recognitionStatus">Cache ready</span>
+              </div>
+              <label class="settingRow stacked">
+                <span>Search</span>
+                <input id="gallerySearchInput" type="search" autocomplete="off" placeholder="Name, tag, person" />
+              </label>
+              <label class="settingRow">
+                <span>Sort</span>
+                <select id="gallerySortSelect" aria-label="Gallery sort">
+                  <option value="recent">Newest</option>
+                  <option value="name">Name</option>
+                  <option value="scene">Scene</option>
+                  <option value="people">People</option>
+                  <option value="size">Largest</option>
+                </select>
+              </label>
+              <label class="settingRow">
+                <span>Filter</span>
+                <select id="galleryFilterSelect" aria-label="Gallery filter">
+                  <option value="all">All</option>
+                  <option value="nature">Nature</option>
+                  <option value="people">People</option>
+                  <option value="known-people">Known People</option>
+                  <option value="city">City</option>
+                  <option value="night">Night</option>
+                  <option value="document">Document</option>
+                  <option value="untagged">Unanalyzed</option>
+                </select>
+              </label>
+              <div class="segmentedControl" aria-label="Gallery view">
+                <button class="segmentButton active" type="button" data-gallery-view="list" title="List view" aria-label="List view">
+                  <i data-lucide="list"></i>
+                </button>
+                <button class="segmentButton" type="button" data-gallery-view="grid" title="Grid view" aria-label="Grid view">
+                  <i data-lucide="layout-grid"></i>
+                </button>
+              </div>
+              <div class="libraryActions two">
+                <button class="miniButton primary" id="analyzeGalleryButton" type="button">
+                  <i data-lucide="scan-face"></i>
+                  <span>Analyze All</span>
+                </button>
+                <button class="miniButton" id="clearRecognitionCacheButton" type="button">
+                  <i data-lucide="database-zap"></i>
+                  <span>Clear Cache</span>
+                </button>
+              </div>
+            </section>
           </div>
           <div class="thumbRail" id="thumbRail"></div>
         </aside>
@@ -356,6 +408,26 @@
                   <input id="cropYRange" type="range" min="0" max="100" value="50" data-crop-range="y" />
                 </label>
               </div>
+            </section>
+
+            <section class="toolPanel" aria-label="Recognition">
+              <div class="paneHeader compact">
+                <h2>Recognition</h2>
+                <button class="miniButton" id="analyzeCurrentButton" type="button">Analyze</button>
+              </div>
+              <div class="recognitionSummary">
+                <div class="recognitionScore" id="recognitionConfidence">-</div>
+                <div class="chipList" id="recognitionTags"></div>
+              </div>
+              <label class="settingRow stacked">
+                <span>People</span>
+                <div class="personInputRow">
+                  <input id="activePeopleInput" type="text" autocomplete="off" placeholder="Name" />
+                  <button class="miniButton primary" id="addPersonButton" type="button">Add</button>
+                  <button class="miniButton" id="removePeopleButton" type="button">Clear</button>
+                </div>
+              </label>
+              <div class="chipList peopleList" id="activePeopleList"></div>
             </section>
 
             <section class="toolPanel" aria-label="Batch editing">

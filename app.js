@@ -95,6 +95,9 @@ const RAW_EXTENSIONS = new Set([
   ".ptx", ".raf", ".raw", ".rw2", ".rwl", ".sr2", ".srf", ".srw", ".x3f",
 ]);
 const RAW_PAIR_SETTINGS_KEY = "itszStudio.rawPairing";
+const RECOGNITION_CACHE_KEY = "itszStudio.recognitionCache.v1";
+const GALLERY_SETTINGS_KEY = "itszStudio.gallerySettings.v1";
+const RECOGNITION_CACHE_LIMIT = 5000;
 
 const state = {
   images: [],
@@ -123,6 +126,17 @@ const state = {
     enabled: true,
     defaultSide: "jpg",
   },
+  gallery: {
+    query: "",
+    sortBy: "recent",
+    filterBy: "all",
+    viewMode: "list",
+  },
+  recognitionCache: {
+    version: 1,
+    entries: {},
+  },
+  recognitionRunning: false,
   activeTool: "move",
   zoom: 1,
   rotation: 0,
@@ -140,6 +154,8 @@ document.addEventListener("DOMContentLoaded", () => {
   bindElements();
   bindEvents();
   loadRawPairingSettings();
+  loadGallerySettings();
+  loadRecognitionCache();
   loadSampleAlbum();
   render();
   initDesktopUpdates();
@@ -185,6 +201,20 @@ function bindElements() {
     pairRawJpgToggle: document.getElementById("pairRawJpgToggle"),
     rawPairDefaultSelect: document.getElementById("rawPairDefaultSelect"),
     rawPairStatus: document.getElementById("rawPairStatus"),
+    gallerySearchInput: document.getElementById("gallerySearchInput"),
+    gallerySortSelect: document.getElementById("gallerySortSelect"),
+    galleryFilterSelect: document.getElementById("galleryFilterSelect"),
+    galleryViewButtons: Array.from(document.querySelectorAll("[data-gallery-view]")),
+    analyzeGalleryButton: document.getElementById("analyzeGalleryButton"),
+    clearRecognitionCacheButton: document.getElementById("clearRecognitionCacheButton"),
+    recognitionStatus: document.getElementById("recognitionStatus"),
+    analyzeCurrentButton: document.getElementById("analyzeCurrentButton"),
+    activePeopleInput: document.getElementById("activePeopleInput"),
+    addPersonButton: document.getElementById("addPersonButton"),
+    removePeopleButton: document.getElementById("removePeopleButton"),
+    recognitionConfidence: document.getElementById("recognitionConfidence"),
+    recognitionTags: document.getElementById("recognitionTags"),
+    activePeopleList: document.getElementById("activePeopleList"),
     updateAutoCheckToggle: document.getElementById("updateAutoCheckToggle"),
     checkUpdatesButton: document.getElementById("checkUpdatesButton"),
     downloadUpdateButton: document.getElementById("downloadUpdateButton"),
@@ -264,6 +294,53 @@ function saveRawPairingSettings() {
   localStorage.setItem(RAW_PAIR_SETTINGS_KEY, JSON.stringify(state.rawPairing));
 }
 
+function loadGallerySettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(GALLERY_SETTINGS_KEY) || "{}");
+    state.gallery = {
+      ...state.gallery,
+      query: typeof saved.query === "string" ? saved.query : "",
+      sortBy: ["recent", "name", "scene", "people", "size"].includes(saved.sortBy) ? saved.sortBy : "recent",
+      filterBy: ["all", "nature", "people", "known-people", "city", "night", "document", "untagged"].includes(saved.filterBy) ? saved.filterBy : "all",
+      viewMode: saved.viewMode === "grid" ? "grid" : "list",
+    };
+  } catch {
+    state.gallery = {
+      query: "",
+      sortBy: "recent",
+      filterBy: "all",
+      viewMode: "list",
+    };
+  }
+}
+
+function saveGallerySettings() {
+  localStorage.setItem(GALLERY_SETTINGS_KEY, JSON.stringify(state.gallery));
+}
+
+function loadRecognitionCache() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RECOGNITION_CACHE_KEY) || "{}");
+    state.recognitionCache = {
+      version: 1,
+      entries: saved && typeof saved.entries === "object" && saved.entries ? saved.entries : {},
+    };
+  } catch {
+    state.recognitionCache = { version: 1, entries: {} };
+  }
+}
+
+function saveRecognitionCache() {
+  const entries = Object.entries(state.recognitionCache.entries || {});
+  if (entries.length > RECOGNITION_CACHE_LIMIT) {
+    entries
+      .sort(([, left], [, right]) => Number(right.analyzedAt || 0) - Number(left.analyzedAt || 0))
+      .slice(RECOGNITION_CACHE_LIMIT)
+      .forEach(([key]) => delete state.recognitionCache.entries[key]);
+  }
+  localStorage.setItem(RECOGNITION_CACHE_KEY, JSON.stringify(state.recognitionCache));
+}
+
 function bindEvents() {
   els.openButton.addEventListener("click", () => els.fileInput.click());
   els.exportButton.addEventListener("click", saveEditedCopy);
@@ -313,6 +390,29 @@ function bindEvents() {
     updateRawPairing({
       defaultSide: els.rawPairDefaultSelect.value === "raw" ? "raw" : "jpg",
     });
+  });
+  els.gallerySearchInput.addEventListener("input", () => {
+    updateGallerySettings({ query: els.gallerySearchInput.value });
+  });
+  els.gallerySortSelect.addEventListener("change", () => {
+    updateGallerySettings({ sortBy: els.gallerySortSelect.value });
+  });
+  els.galleryFilterSelect.addEventListener("change", () => {
+    updateGallerySettings({ filterBy: els.galleryFilterSelect.value });
+  });
+  els.galleryViewButtons.forEach((button) => {
+    button.addEventListener("click", () => updateGallerySettings({ viewMode: button.dataset.galleryView }));
+  });
+  els.analyzeGalleryButton.addEventListener("click", analyzeGalleryImages);
+  els.clearRecognitionCacheButton.addEventListener("click", clearRecognitionCache);
+  els.analyzeCurrentButton.addEventListener("click", analyzeActiveRecognition);
+  els.addPersonButton.addEventListener("click", addPersonToActive);
+  els.removePeopleButton.addEventListener("click", clearPeopleFromActive);
+  els.activePeopleInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addPersonToActive();
+    }
   });
   els.checkUpdatesButton.addEventListener("click", checkForUpdates);
   els.downloadUpdateButton.addEventListener("click", downloadUpdate);
@@ -506,8 +606,7 @@ function makeSampleImage(name, note, modified, drawFn) {
   drawFn(ctx, canvas.width, canvas.height);
   const src = canvas.toDataURL("image/jpeg", 0.9);
 
-  return {
-    id: makeId(),
+  return makeImageEntry({
     name,
     note,
     src,
@@ -516,9 +615,9 @@ function makeSampleImage(name, note, modified, drawFn) {
     modified,
     width: canvas.width,
     height: canvas.height,
-    edit: makeDefaultEdit(),
+    previewSupported: true,
     sample: true,
-  };
+  });
 }
 
 function drawDeskSample(ctx, width, height) {
@@ -715,9 +814,10 @@ function selectPairImage(group) {
   return primary || fallback || null;
 }
 
-function getLibraryImages() {
+function getPairedLibraryImages() {
   state.images.forEach((image) => {
     delete image.pairInfo;
+    applyCachedRecognition(image);
   });
 
   if (!state.rawPairing.enabled) {
@@ -753,6 +853,69 @@ function getLibraryImages() {
   return visible;
 }
 
+function getLibraryImages() {
+  return sortGalleryImages(filterGalleryImages(getPairedLibraryImages()));
+}
+
+function filterGalleryImages(images) {
+  const query = state.gallery.query.trim().toLowerCase();
+  return images.filter((image) => {
+    const recognition = image.recognition || getCachedRecognition(image);
+    if (!matchesGalleryFilter(image, recognition, state.gallery.filterBy)) return false;
+    if (!query) return true;
+    return recognitionSearchText(image, recognition).includes(query);
+  });
+}
+
+function sortGalleryImages(images) {
+  const sorted = [...images];
+  sorted.sort((left, right) => {
+    if (state.gallery.sortBy === "name") return left.name.localeCompare(right.name);
+    if (state.gallery.sortBy === "scene") {
+      const scene = recognitionScene(left).localeCompare(recognitionScene(right));
+      return scene || left.name.localeCompare(right.name);
+    }
+    if (state.gallery.sortBy === "people") {
+      const people = recognitionPeopleText(left).localeCompare(recognitionPeopleText(right));
+      return people || left.name.localeCompare(right.name);
+    }
+    if (state.gallery.sortBy === "size") return Number(right.size || 0) - Number(left.size || 0);
+    return Number(right.modified || 0) - Number(left.modified || 0);
+  });
+  return sorted;
+}
+
+function matchesGalleryFilter(image, recognition, filterBy) {
+  if (filterBy === "all") return true;
+  if (filterBy === "untagged") return !recognition;
+  if (filterBy === "known-people") return Boolean(recognition?.people?.length);
+  if (filterBy === "people") return Boolean(recognition?.peopleLikely || recognition?.people?.length);
+  return Boolean(recognition?.labels?.includes(filterBy) || recognition?.sceneKey === filterBy);
+}
+
+function recognitionSearchText(image, recognition) {
+  const parts = [
+    image.name,
+    image.type,
+    image.relativePath,
+    image.sourcePath,
+    recognition?.scene,
+    ...(recognition?.labels || []),
+    ...(recognition?.people || []),
+  ];
+  return parts.filter(Boolean).join(" ").toLowerCase();
+}
+
+function recognitionScene(image) {
+  return String((image.recognition || getCachedRecognition(image))?.scene || "Unanalyzed");
+}
+
+function recognitionPeopleText(image) {
+  const recognition = image.recognition || getCachedRecognition(image);
+  if (recognition?.people?.length) return recognition.people.join(", ");
+  return recognition?.peopleLikely ? "People" : "No people";
+}
+
 function getPairCounts() {
   let pairs = 0;
   for (const group of buildRawPairGroups().values()) {
@@ -760,7 +923,7 @@ function getPairCounts() {
   }
   return {
     pairs,
-    visible: getLibraryImages().length,
+    visible: getPairedLibraryImages().length,
     total: state.images.length,
   };
 }
@@ -808,8 +971,46 @@ function makePlaceholderSrc(name, type = "photo") {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+function recognitionKeyForDetails(details) {
+  const location = details.sourcePath || details.relativePath || details.name || "photo";
+  const modified = Number(details.modified || 0);
+  const size = Number(details.size || 0);
+  const dimensions = `${Number(details.width || 0)}x${Number(details.height || 0)}`;
+  return [location, size, modified, dimensions].join("|").toLowerCase();
+}
+
+function getCachedRecognition(image) {
+  return image?.recognitionKey ? state.recognitionCache.entries[image.recognitionKey] || null : null;
+}
+
+function applyCachedRecognition(image) {
+  if (!image) return null;
+  image.recognition = getCachedRecognition(image);
+  return image.recognition;
+}
+
+function saveRecognitionForImage(image, recognition, options = {}) {
+  if (!image?.recognitionKey || !recognition) return;
+  const previous = getCachedRecognition(image);
+  const people = options.mergePeople === false
+    ? (recognition.people || []).map(normalizePersonName).filter(Boolean)
+    : Array.from(new Set([
+      ...(previous?.people || []),
+      ...(recognition.people || []),
+    ].map(normalizePersonName).filter(Boolean))).sort((left, right) => left.localeCompare(right));
+
+  const next = {
+    ...recognition,
+    people,
+    analyzedAt: recognition.analyzedAt || Date.now(),
+  };
+  state.recognitionCache.entries[image.recognitionKey] = next;
+  image.recognition = next;
+  saveRecognitionCache();
+}
+
 function makeImageEntry(details) {
-  return {
+  const entry = {
     id: makeId(),
     name: details.name,
     src: details.src,
@@ -821,9 +1022,13 @@ function makeImageEntry(details) {
     sourcePath: details.sourcePath || "",
     relativePath: details.relativePath || "",
     previewSupported: details.previewSupported !== false,
+    recognitionKey: details.recognitionKey || recognitionKeyForDetails(details),
+    recognition: null,
     edit: makeDefaultEdit(),
     sample: Boolean(details.sample),
   };
+  applyCachedRecognition(entry);
+  return entry;
 }
 
 function addImportedImages(imported) {
@@ -913,6 +1118,8 @@ function render() {
   renderEditState();
   renderBatchStatus();
   renderLibraryState();
+  renderGalleryState();
+  renderRecognitionState();
   renderUpdateState();
   renderStudioPanels();
   renderWorkspaceTool();
@@ -926,10 +1133,16 @@ function render() {
 function renderLists() {
   const images = getLibraryImages();
   const pairCounts = getPairCounts();
-  const hiddenCount = pairCounts.total - pairCounts.visible;
+  const pairedHiddenCount = pairCounts.total - pairCounts.visible;
+  const filteredCount = pairCounts.visible - images.length;
   els.imageCount.textContent = String(images.length);
-  els.collectionStatus.textContent = `${images.length} visible${hiddenCount ? `, ${hiddenCount} paired` : ""}`;
-  els.thumbRail.replaceChildren(...images.map((image, index) => createThumb(image, index)));
+  els.collectionStatus.textContent = [
+    `${images.length} visible`,
+    filteredCount ? `${filteredCount} filtered` : "",
+    pairedHiddenCount ? `${pairedHiddenCount} paired` : "",
+  ].filter(Boolean).join(", ");
+  els.thumbRail.classList.toggle("gridView", state.gallery.viewMode === "grid");
+  els.thumbRail.replaceChildren(...(images.length ? images.map((image, index) => createThumb(image, index)) : [createEmptyGalleryMessage()]));
   els.filmstrip.replaceChildren(...images.map((image, index) => createStripButton(image, index)));
 }
 
@@ -953,21 +1166,32 @@ function createThumb(image, index) {
 
   const meta = document.createElement("div");
   meta.className = "thumbMeta";
-  meta.textContent = image.pairInfo
+  const recognition = image.recognition || getCachedRecognition(image);
+  meta.textContent = recognition?.scene
+    ? `${recognition.scene} - ${Math.round((recognition.confidence || 0) * 100)}%`
+    : image.pairInfo
     ? `RAW + JPG - using ${image.pairInfo.role.toUpperCase()}`
     : image.width && image.height ? `${image.width} x ${image.height}` : image.type;
 
+  const chips = createRecognitionChips(recognition, { max: 3, compact: true });
   if (image.pairInfo) {
     const badge = document.createElement("div");
     badge.className = "pairBadge";
     badge.textContent = "paired";
-    copy.append(name, meta, badge);
+    copy.append(name, meta, badge, chips);
   } else {
-    copy.append(name, meta);
+    copy.append(name, meta, chips);
   }
 
   button.append(img, copy);
   return button;
+}
+
+function createEmptyGalleryMessage() {
+  const empty = document.createElement("div");
+  empty.className = "emptyGallery";
+  empty.textContent = "No matches";
+  return empty;
 }
 
 function createStripButton(image, index) {
@@ -1205,6 +1429,86 @@ function renderLibraryState() {
   els.ignoreCameraButton.disabled = !enabled || !camera || info.importing;
 }
 
+function renderGalleryState() {
+  els.gallerySearchInput.value = state.gallery.query;
+  els.gallerySortSelect.value = state.gallery.sortBy;
+  els.galleryFilterSelect.value = state.gallery.filterBy;
+  els.galleryViewButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.galleryView === state.gallery.viewMode);
+  });
+
+  const cached = state.images.filter((image) => image.recognition || getCachedRecognition(image)).length;
+  const visible = getLibraryImages().length;
+  els.recognitionStatus.textContent = state.recognitionRunning ? "Analyzing" : `${cached}/${state.images.length} cached`;
+  els.analyzeGalleryButton.disabled = state.recognitionRunning || !state.images.length;
+  els.clearRecognitionCacheButton.disabled = state.recognitionRunning || !Object.keys(state.recognitionCache.entries || {}).length;
+  els.gallerySearchInput.disabled = state.recognitionRunning;
+  els.gallerySortSelect.disabled = state.recognitionRunning;
+  els.galleryFilterSelect.disabled = state.recognitionRunning;
+  els.imageCount.title = `${visible} visible from ${state.images.length} total`;
+}
+
+function renderRecognitionState() {
+  const active = getActive();
+  const recognition = active?.recognition || getCachedRecognition(active);
+  const hasActive = Boolean(active);
+  const confidence = recognition ? `${Math.round((recognition.confidence || 0) * 100)}% ${recognition.scene}` : "Unanalyzed";
+
+  els.recognitionConfidence.textContent = hasActive ? confidence : "-";
+  replaceChips(els.recognitionTags, createRecognitionChips(recognition, { max: 8 }));
+  els.activePeopleList.replaceChildren(...createPeopleChips(recognition?.people || []));
+  els.activePeopleInput.disabled = !hasActive || state.recognitionRunning;
+  els.addPersonButton.disabled = !hasActive || state.recognitionRunning;
+  els.removePeopleButton.disabled = !hasActive || state.recognitionRunning || !recognition?.people?.length;
+  els.analyzeCurrentButton.disabled = !hasActive || state.recognitionRunning;
+}
+
+function createRecognitionChips(recognition, options = {}) {
+  const list = document.createElement("div");
+  list.className = options.compact ? "chipList compact" : "chipList";
+  if (!recognition) {
+    if (!options.compact) {
+      const chip = document.createElement("span");
+      chip.className = "tagChip muted";
+      chip.textContent = "unanalyzed";
+      list.append(chip);
+    }
+    return list;
+  }
+
+  const labels = [
+    recognition.scene,
+    ...(recognition.labels || []),
+    ...(recognition.people || []).map((person) => `person: ${person}`),
+  ].filter(Boolean);
+  labels.slice(0, options.max || 6).forEach((label) => {
+    const chip = document.createElement("span");
+    chip.className = "tagChip";
+    chip.textContent = label;
+    list.append(chip);
+  });
+  return list;
+}
+
+function createPeopleChips(people) {
+  if (!people.length) {
+    const chip = document.createElement("span");
+    chip.className = "tagChip muted";
+    chip.textContent = "no saved people";
+    return [chip];
+  }
+  return people.map((person) => {
+    const chip = document.createElement("span");
+    chip.className = "tagChip person";
+    chip.textContent = person;
+    return chip;
+  });
+}
+
+function replaceChips(container, chips) {
+  container.replaceChildren(...Array.from(chips.children));
+}
+
 function updateRawPairing(patch) {
   const active = getActive();
   state.rawPairing = {
@@ -1215,6 +1519,23 @@ function updateRawPairing(patch) {
   saveRawPairingSettings();
   if (active) setActiveByImageId(active.id);
   state.editHistory = [];
+  resetView(false);
+  render();
+}
+
+function updateGallerySettings(patch) {
+  const active = getActive();
+  state.gallery = {
+    ...state.gallery,
+    ...patch,
+    query: typeof patch.query === "string" ? patch.query : state.gallery.query,
+    sortBy: ["recent", "name", "scene", "people", "size"].includes(patch.sortBy) ? patch.sortBy : state.gallery.sortBy,
+    filterBy: ["all", "nature", "people", "known-people", "city", "night", "document", "untagged"].includes(patch.filterBy) ? patch.filterBy : state.gallery.filterBy,
+    viewMode: patch.viewMode === "grid" ? "grid" : patch.viewMode === "list" ? "list" : state.gallery.viewMode,
+  };
+  saveGallerySettings();
+  if (active) setActiveByImageId(active.id);
+  state.activeIndex = Math.min(state.activeIndex, Math.max(0, getLibraryImages().length - 1));
   resetView(false);
   render();
 }
@@ -1438,6 +1759,309 @@ function readDesktopPhotoRecord(record) {
     };
     image.src = src;
   });
+}
+
+async function analyzeGalleryImages() {
+  if (state.recognitionRunning || !state.images.length) return;
+  state.recognitionRunning = true;
+  renderGalleryState();
+  renderRecognitionState();
+  try {
+    const images = state.images;
+    let analyzed = 0;
+    for (const image of images) {
+      try {
+        els.recognitionStatus.textContent = `${analyzed + 1}/${images.length}`;
+        await analyzeAndCacheImage(image);
+        analyzed += 1;
+      } catch (error) {
+        console.error(error);
+      }
+    }
+    setActiveByImageId(getActive()?.id);
+    render();
+  } finally {
+    state.recognitionRunning = false;
+    renderGalleryState();
+    renderRecognitionState();
+  }
+}
+
+async function analyzeActiveRecognition() {
+  const active = getActive();
+  if (!active || state.recognitionRunning) return;
+  state.recognitionRunning = true;
+  renderGalleryState();
+  renderRecognitionState();
+  try {
+    await analyzeAndCacheImage(active);
+    render();
+  } catch (error) {
+    console.error(error);
+  } finally {
+    state.recognitionRunning = false;
+    renderGalleryState();
+    renderRecognitionState();
+  }
+}
+
+async function analyzeAndCacheImage(image) {
+  const recognition = await buildRecognitionForImage(image);
+  saveRecognitionForImage(image, recognition);
+  return recognition;
+}
+
+async function buildRecognitionForImage(image) {
+  if (!image.previewSupported) {
+    return makeRecognitionResult({
+      scene: "Raw/Preview",
+      sceneKey: "document",
+      labels: ["unpreviewed", extensionFromName(image.name).replace(".", "") || "photo"],
+      confidence: 0.42,
+      peopleLikely: false,
+      faceCount: 0,
+    });
+  }
+
+  const sample = await sampleImageMetrics(image);
+  const metrics = analyzeRecognitionMetrics(sample.data, sample.size);
+  const scene = classifyRecognitionScene(metrics, image);
+  return makeRecognitionResult({
+    ...scene,
+    metrics,
+    peopleLikely: metrics.skinRatio > 0.055 || metrics.centerSkinRatio > 0.045,
+    faceCount: estimateFaceCount(metrics),
+    confidence: scene.confidence,
+  });
+}
+
+function makeRecognitionResult(result) {
+  const labels = Array.from(new Set([
+    result.sceneKey,
+    ...(result.labels || []),
+    result.peopleLikely ? "people" : "",
+    result.faceCount ? "faces" : "",
+  ].filter(Boolean)));
+
+  return {
+    version: 1,
+    scene: result.scene || "Photo",
+    sceneKey: result.sceneKey || "photo",
+    labels,
+    peopleLikely: Boolean(result.peopleLikely),
+    faceCount: Number(result.faceCount) || 0,
+    confidence: clamp(Number(result.confidence) || 0.5, 0.1, 0.98),
+    metrics: result.metrics || {},
+    people: result.people || [],
+    analyzedAt: Date.now(),
+  };
+}
+
+function analyzeRecognitionMetrics(data, size) {
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let saturation = 0;
+  let luma = 0;
+  let greenPixels = 0;
+  let bluePixels = 0;
+  let skyPixels = 0;
+  let skinPixels = 0;
+  let centerSkinPixels = 0;
+  let grayPixels = 0;
+  let warmPixels = 0;
+  let darkPixels = 0;
+  let brightPixels = 0;
+  let edgeEnergy = 0;
+  let centerPixels = 0;
+  const total = size * size;
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const index = (y * size + x) * 4;
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const sat = max === 0 ? 0 : (max - min) / max;
+      const lum = r * 0.2126 + g * 0.7152 + b * 0.0722;
+      const inCenter = x > size * 0.25 && x < size * 0.75 && y > size * 0.14 && y < size * 0.72;
+
+      red += r;
+      green += g;
+      blue += b;
+      saturation += sat;
+      luma += lum;
+      if (g > r * 1.08 && g > b * 1.08 && sat > 0.16) greenPixels += 1;
+      if (b > r * 1.08 && b > g * 1.03 && sat > 0.12) bluePixels += 1;
+      if (b > 92 && g > 84 && b > r * 1.08 && lum > 86) skyPixels += 1;
+      if (r > 72 && g > 44 && b > 28 && r > g * 1.05 && g > b * 1.04 && sat > 0.18 && sat < 0.72) {
+        skinPixels += 1;
+        if (inCenter) centerSkinPixels += 1;
+      }
+      if (sat < 0.13) grayPixels += 1;
+      if (r > g * 1.08 && r > b * 1.16 && sat > 0.25) warmPixels += 1;
+      if (lum < 58) darkPixels += 1;
+      if (lum > 202) brightPixels += 1;
+      if (inCenter) centerPixels += 1;
+
+      if (x > 0 && y > 0) {
+        const left = lumaAt(data, index - 4);
+        const up = lumaAt(data, index - size * 4);
+        edgeEnergy += Math.min(80, Math.abs(lum - left) + Math.abs(lum - up));
+      }
+    }
+  }
+
+  return {
+    avgRed: red / total,
+    avgGreen: green / total,
+    avgBlue: blue / total,
+    avgLuma: luma / total,
+    avgSaturation: saturation / total,
+    greenRatio: greenPixels / total,
+    blueRatio: bluePixels / total,
+    skyRatio: skyPixels / total,
+    skinRatio: skinPixels / total,
+    centerSkinRatio: centerPixels ? centerSkinPixels / centerPixels : 0,
+    grayRatio: grayPixels / total,
+    warmRatio: warmPixels / total,
+    darkRatio: darkPixels / total,
+    brightRatio: brightPixels / total,
+    edgeScore: edgeEnergy / Math.max(1, total - size * 2),
+  };
+}
+
+function classifyRecognitionScene(metrics, image) {
+  const labels = [];
+  const nameText = `${image.name} ${image.relativePath || ""}`.toLowerCase();
+  if (metrics.greenRatio > 0.17 || (metrics.greenRatio + metrics.skyRatio > 0.28 && metrics.avgSaturation > 0.15)) {
+    labels.push("outdoors");
+    if (metrics.skyRatio > 0.08) labels.push("sky");
+    if (metrics.greenRatio > 0.22) labels.push("trees");
+    return {
+      scene: metrics.blueRatio > 0.18 ? "Nature / Water" : "Nature",
+      sceneKey: "nature",
+      labels,
+      confidence: clamp(0.56 + metrics.greenRatio + metrics.skyRatio * 0.8, 0.48, 0.94),
+    };
+  }
+  if (metrics.darkRatio > 0.46 || metrics.avgLuma < 68 || /night|dark|concert|neon/.test(nameText)) {
+    labels.push("low light");
+    if (metrics.warmRatio > 0.08 || metrics.blueRatio > 0.08) labels.push("lights");
+    return {
+      scene: metrics.edgeScore > 15 ? "Night / City" : "Night",
+      sceneKey: "night",
+      labels,
+      confidence: clamp(0.58 + metrics.darkRatio * 0.7, 0.5, 0.93),
+    };
+  }
+  if (metrics.skinRatio > 0.07 || metrics.centerSkinRatio > 0.05) {
+    labels.push("people");
+    if (metrics.centerSkinRatio > 0.08) labels.push("portrait");
+    return {
+      scene: metrics.centerSkinRatio > 0.08 ? "Portrait" : "People",
+      sceneKey: "people",
+      labels,
+      confidence: clamp(0.48 + metrics.skinRatio * 2.2 + metrics.centerSkinRatio, 0.45, 0.9),
+    };
+  }
+  if ((metrics.grayRatio > 0.42 && metrics.edgeScore > 14) || /street|building|city|urban|architecture/.test(nameText)) {
+    labels.push("structure");
+    if (metrics.edgeScore > 18) labels.push("detail");
+    return {
+      scene: "City / Structure",
+      sceneKey: "city",
+      labels,
+      confidence: clamp(0.48 + metrics.grayRatio * 0.55 + metrics.edgeScore / 80, 0.44, 0.86),
+    };
+  }
+  if ((metrics.brightRatio > 0.32 && metrics.grayRatio > 0.38) || /scan|doc|receipt|paper|note/.test(nameText)) {
+    labels.push("paper");
+    return {
+      scene: "Document",
+      sceneKey: "document",
+      labels,
+      confidence: clamp(0.54 + metrics.brightRatio * 0.5, 0.45, 0.88),
+    };
+  }
+  if (metrics.warmRatio > 0.18 && metrics.avgSaturation > 0.2) {
+    labels.push("warm color");
+    return {
+      scene: "Indoor / Object",
+      sceneKey: "object",
+      labels,
+      confidence: clamp(0.48 + metrics.warmRatio, 0.42, 0.8),
+    };
+  }
+  return {
+    scene: "Photo",
+    sceneKey: "photo",
+    labels: metrics.avgSaturation < 0.12 ? ["neutral"] : ["general"],
+    confidence: 0.5,
+  };
+}
+
+function estimateFaceCount(metrics) {
+  if (metrics.skinRatio < 0.045 && metrics.centerSkinRatio < 0.035) return 0;
+  if (metrics.skinRatio > 0.22) return 3;
+  if (metrics.skinRatio > 0.12) return 2;
+  return 1;
+}
+
+function normalizePersonName(value) {
+  return String(value || "")
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 64);
+}
+
+async function addPersonToActive() {
+  const active = getActive();
+  if (!active) return;
+  const names = els.activePeopleInput.value
+    .split(/[,;]+/)
+    .map(normalizePersonName)
+    .filter(Boolean);
+  if (!names.length) return;
+  const recognition = active.recognition || getCachedRecognition(active) || makeRecognitionResult({
+    scene: "People",
+    sceneKey: "people",
+    labels: ["people"],
+    confidence: 0.6,
+    peopleLikely: true,
+    faceCount: 1,
+  });
+  saveRecognitionForImage(active, {
+    ...recognition,
+    people: names,
+    peopleLikely: true,
+    labels: Array.from(new Set([...(recognition.labels || []), "people", "faces"])),
+  });
+  els.activePeopleInput.value = "";
+  render();
+}
+
+function clearPeopleFromActive() {
+  const active = getActive();
+  const recognition = active?.recognition || getCachedRecognition(active);
+  if (!active || !recognition) return;
+  saveRecognitionForImage(active, {
+    ...recognition,
+    people: [],
+  }, { mergePeople: false });
+  render();
+}
+
+function clearRecognitionCache() {
+  state.recognitionCache = { version: 1, entries: {} };
+  state.images.forEach((image) => {
+    image.recognition = null;
+  });
+  saveRecognitionCache();
+  render();
 }
 
 function setBatchStatus(message) {

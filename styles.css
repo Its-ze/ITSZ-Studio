@@ -206,7 +206,7 @@ h1 {
 }
 
 .libraryPane {
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto minmax(0, 1fr) minmax(136px, 30vh);
   border-right: 1px solid var(--line);
 }
 
@@ -248,6 +248,8 @@ h1 {
 .libraryTools {
   display: grid;
   gap: 10px;
+  min-height: 0;
+  overflow: auto;
   padding: 12px;
   border-bottom: 1px solid var(--line);
 }
@@ -264,6 +266,10 @@ h1 {
 
 .libraryCard .paneHeader.compact {
   padding-bottom: 0;
+}
+
+.galleryCard {
+  order: -3;
 }
 
 .libraryPath,
@@ -288,6 +294,10 @@ h1 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
+}
+
+.libraryActions.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .cameraDeleteRow {
@@ -320,6 +330,49 @@ h1 {
   padding: 0 8px;
 }
 
+.settingRow input {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #121512;
+  color: var(--text);
+  padding: 0 8px;
+}
+
+.settingRow.stacked {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.segmentedControl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.segmentButton {
+  display: grid;
+  place-items: center;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #171a18;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.segmentButton svg {
+  width: 16px;
+  height: 16px;
+}
+
+.segmentButton.active {
+  border-color: rgba(57, 216, 190, 0.64);
+  background: rgba(57, 216, 190, 0.12);
+}
+
 .pairBadge {
   display: inline-flex;
   align-items: center;
@@ -330,6 +383,79 @@ h1 {
   border-radius: 999px;
   color: var(--gold);
   font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.chipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.chipList.compact {
+  margin-top: 6px;
+}
+
+.tagChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 20px;
+  padding: 0 7px;
+  border: 1px solid rgba(57, 216, 190, 0.32);
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(57, 216, 190, 0.08);
+  font-size: 0.68rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tagChip.person {
+  border-color: rgba(182, 136, 255, 0.45);
+  background: rgba(182, 136, 255, 0.12);
+}
+
+.tagChip.muted {
+  border-color: var(--line);
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.personInputRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+
+.recognitionSummary {
+  display: grid;
+  gap: 8px;
+}
+
+.recognitionScore {
+  display: grid;
+  place-items: center;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #171a18;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.emptyGallery {
+  display: grid;
+  place-items: center;
+  min-height: 92px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
   font-weight: 800;
 }
 
@@ -1158,7 +1284,7 @@ h1 {
 }
 
 .libraryPane {
-  grid-template-rows: auto minmax(0, auto) 1fr;
+  grid-template-rows: auto minmax(0, 1fr) minmax(136px, 30vh);
 }
 
 .paneHeader {
@@ -1200,15 +1326,45 @@ h1 {
   padding: 8px;
 }
 
+.settingRow input,
+.settingRow select,
+.segmentButton,
+.recognitionScore {
+  border-radius: 3px;
+  border-color: #464646;
+  background: #202020;
+}
+
+.segmentButton.active {
+  border-color: #61b7c5;
+  background: #263e43;
+}
+
 .thumbRail {
   gap: 5px;
   padding: 8px;
+}
+
+.thumbRail.gridView {
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  align-content: start;
 }
 
 .thumbButton {
   grid-template-columns: 52px minmax(0, 1fr);
   min-height: 64px;
   padding: 5px;
+}
+
+.thumbRail.gridView .thumbButton {
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 7px;
+  min-height: 156px;
+}
+
+.thumbRail.gridView .thumbButton img {
+  aspect-ratio: 4 / 3;
 }
 
 .thumbButton img {
@@ -1226,6 +1382,19 @@ h1 {
 
 .thumbMeta {
   font-size: 0.68rem;
+}
+
+.tagChip {
+  border-radius: 3px;
+  font-size: 0.64rem;
+}
+
+.personInputRow {
+  grid-template-columns: minmax(0, 1fr) 54px 58px;
+}
+
+.emptyGallery {
+  border-radius: 3px;
 }
 
 .stagePane {

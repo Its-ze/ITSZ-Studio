@@ -98,6 +98,8 @@ const RAW_PAIR_SETTINGS_KEY = "itszStudio.rawPairing";
 const RECOGNITION_CACHE_KEY = "itszStudio.recognitionCache.v1";
 const GALLERY_SETTINGS_KEY = "itszStudio.gallerySettings.v1";
 const RECOGNITION_CACHE_LIMIT = 5000;
+const RECOGNITION_SAMPLE_SIZE = 72;
+const SAMPLE_CACHE_LIMIT = 96;
 
 const state = {
   images: [],
@@ -137,6 +139,8 @@ const state = {
     entries: {},
   },
   recognitionRunning: false,
+  recognitionStats: "Smart cache ready",
+  sampleCache: new Map(),
   activeTool: "move",
   zoom: 1,
   rotation: 0,
@@ -188,6 +192,8 @@ function bindElements() {
     autoDenoiseButton: document.getElementById("autoDenoiseButton"),
     resetEditsButton: document.getElementById("resetEditsButton"),
     autoBatchButton: document.getElementById("autoBatchButton"),
+    recognizeBatchButton: document.getElementById("recognizeBatchButton"),
+    smartBatchButton: document.getElementById("smartBatchButton"),
     matchBatchButton: document.getElementById("matchBatchButton"),
     copiesBatchButton: document.getElementById("copiesBatchButton"),
     resetBatchButton: document.getElementById("resetBatchButton"),
@@ -208,6 +214,7 @@ function bindElements() {
     analyzeGalleryButton: document.getElementById("analyzeGalleryButton"),
     clearRecognitionCacheButton: document.getElementById("clearRecognitionCacheButton"),
     recognitionStatus: document.getElementById("recognitionStatus"),
+    recognitionMetrics: document.getElementById("recognitionMetrics"),
     analyzeCurrentButton: document.getElementById("analyzeCurrentButton"),
     activePeopleInput: document.getElementById("activePeopleInput"),
     addPersonButton: document.getElementById("addPersonButton"),
@@ -240,6 +247,7 @@ function bindElements() {
     activeZoom: document.getElementById("activeZoom"),
     editStatus: document.getElementById("editStatus"),
     batchStatus: document.getElementById("batchStatus"),
+    batchMetrics: document.getElementById("batchMetrics"),
     homeStatus: document.getElementById("homeStatus"),
     homePath: document.getElementById("homePath"),
     cameraStatus: document.getElementById("cameraStatus"),
@@ -369,6 +377,8 @@ function bindEvents() {
   els.autoDenoiseButton.addEventListener("click", autoDenoiseActive);
   els.resetEditsButton.addEventListener("click", resetEdits);
   els.autoBatchButton.addEventListener("click", autoBatchEdit);
+  els.recognizeBatchButton.addEventListener("click", recognizeAndTagBatch);
+  els.smartBatchButton.addEventListener("click", smartBatchEditByTags);
   els.matchBatchButton.addEventListener("click", matchBatchToCurrent);
   els.copiesBatchButton.addEventListener("click", makeBatchCopies);
   els.resetBatchButton.addEventListener("click", resetBatchEdits);
@@ -890,7 +900,7 @@ function matchesGalleryFilter(image, recognition, filterBy) {
   if (filterBy === "untagged") return !recognition;
   if (filterBy === "known-people") return Boolean(recognition?.people?.length);
   if (filterBy === "people") return Boolean(recognition?.peopleLikely || recognition?.people?.length);
-  return Boolean(recognition?.labels?.includes(filterBy) || recognition?.sceneKey === filterBy);
+  return Boolean(recognition?.labels?.includes(filterBy) || recognition?.tags?.includes(filterBy) || recognition?.sceneKey === filterBy);
 }
 
 function recognitionSearchText(image, recognition) {
@@ -901,6 +911,7 @@ function recognitionSearchText(image, recognition) {
     image.sourcePath,
     recognition?.scene,
     ...(recognition?.labels || []),
+    ...(recognition?.tags || recognition?.autoTags || []),
     ...(recognition?.people || []),
   ];
   return parts.filter(Boolean).join(" ").toLowerCase();
@@ -980,13 +991,48 @@ function recognitionKeyForDetails(details) {
 }
 
 function getCachedRecognition(image) {
-  return image?.recognitionKey ? state.recognitionCache.entries[image.recognitionKey] || null : null;
+  if (!image?.recognitionKey) return null;
+  const cached = state.recognitionCache.entries[image.recognitionKey] || null;
+  if (!cached) return null;
+  const normalized = normalizeRecognitionRecord(cached, image);
+  state.recognitionCache.entries[image.recognitionKey] = normalized;
+  return normalized;
 }
 
 function applyCachedRecognition(image) {
   if (!image) return null;
   image.recognition = getCachedRecognition(image);
   return image.recognition;
+}
+
+function normalizeRecognitionRecord(recognition, image) {
+  const people = Array.from(new Set((recognition.people || []).map(normalizePersonName).filter(Boolean)))
+    .sort((left, right) => left.localeCompare(right));
+  const labels = Array.from(new Set([
+    recognition.sceneKey,
+    ...(recognition.labels || []),
+    recognition.peopleLikely ? "people" : "",
+    recognition.faceCount ? "faces" : "",
+  ].filter(Boolean).map(normalizeTagText)));
+  const base = {
+    version: 1,
+    scene: recognition.scene || "Photo",
+    sceneKey: normalizeTagText(recognition.sceneKey || "photo") || "photo",
+    labels,
+    peopleLikely: Boolean(recognition.peopleLikely),
+    faceCount: Number(recognition.faceCount) || 0,
+    confidence: clamp(Number(recognition.confidence) || 0.5, 0.1, 0.98),
+    metrics: recognition.metrics || {},
+    people,
+    analyzedAt: Number(recognition.analyzedAt) || Date.now(),
+    elapsedMs: Number(recognition.elapsedMs) || 0,
+  };
+  const autoTags = buildAutoTagsForRecognition(base, image);
+  return {
+    ...base,
+    autoTags,
+    tags: autoTags,
+  };
 }
 
 function saveRecognitionForImage(image, recognition, options = {}) {
@@ -999,14 +1045,53 @@ function saveRecognitionForImage(image, recognition, options = {}) {
       ...(recognition.people || []),
     ].map(normalizePersonName).filter(Boolean))).sort((left, right) => left.localeCompare(right));
 
-  const next = {
+  const next = normalizeRecognitionRecord({
     ...recognition,
     people,
     analyzedAt: recognition.analyzedAt || Date.now(),
-  };
+  }, image);
   state.recognitionCache.entries[image.recognitionKey] = next;
   image.recognition = next;
   saveRecognitionCache();
+}
+
+function normalizeTagText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9+#]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+function addTag(tags, value) {
+  const tag = normalizeTagText(value);
+  if (tag && !tags.includes(tag)) tags.push(tag);
+}
+
+function buildAutoTagsForRecognition(recognition, image) {
+  const tags = [];
+  addTag(tags, recognition.sceneKey || "photo");
+  (recognition.labels || []).forEach((label) => addTag(tags, label));
+  if (recognition.peopleLikely || recognition.people?.length) addTag(tags, "people");
+  if (recognition.people?.length) addTag(tags, "known-people");
+  (recognition.people || []).forEach((person) => addTag(tags, `person-${person}`));
+  if (recognition.faceCount) addTag(tags, `${recognition.faceCount}-face${recognition.faceCount === 1 ? "" : "s"}`);
+  if (recognition.confidence >= 0.72) addTag(tags, "high-confidence");
+
+  const extension = extensionFromName(image?.name || "");
+  if (extension) addTag(tags, extension.replace(".", ""));
+  if (extension && RAW_EXTENSIONS.has(extension)) addTag(tags, "raw");
+  if (extension && JPEG_EXTENSIONS.has(extension)) addTag(tags, "jpg");
+
+  const width = Number(image?.width || 0);
+  const height = Number(image?.height || 0);
+  if (width && height) {
+    if (width > height * 1.25) addTag(tags, "landscape");
+    else if (height > width * 1.25) addTag(tags, "portrait");
+    else addTag(tags, "square-ish");
+  }
+
+  return tags.slice(0, 16);
 }
 
 function makeImageEntry(details) {
@@ -1388,6 +1473,7 @@ function renderEditState() {
 
 function renderBatchStatus() {
   els.batchStatus.textContent = state.batchStatus;
+  els.batchMetrics.textContent = state.recognitionStats;
 }
 
 function renderLibraryState() {
@@ -1430,21 +1516,24 @@ function renderLibraryState() {
 }
 
 function renderGalleryState() {
+  const busy = state.recognitionRunning || state.batchRunning;
   els.gallerySearchInput.value = state.gallery.query;
   els.gallerySortSelect.value = state.gallery.sortBy;
   els.galleryFilterSelect.value = state.gallery.filterBy;
   els.galleryViewButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.galleryView === state.gallery.viewMode);
+    button.disabled = busy;
   });
 
   const cached = state.images.filter((image) => image.recognition || getCachedRecognition(image)).length;
   const visible = getLibraryImages().length;
-  els.recognitionStatus.textContent = state.recognitionRunning ? "Analyzing" : `${cached}/${state.images.length} cached`;
-  els.analyzeGalleryButton.disabled = state.recognitionRunning || !state.images.length;
-  els.clearRecognitionCacheButton.disabled = state.recognitionRunning || !Object.keys(state.recognitionCache.entries || {}).length;
-  els.gallerySearchInput.disabled = state.recognitionRunning;
-  els.gallerySortSelect.disabled = state.recognitionRunning;
-  els.galleryFilterSelect.disabled = state.recognitionRunning;
+  els.recognitionStatus.textContent = busy ? "Working" : `${cached}/${state.images.length} cached`;
+  els.recognitionMetrics.textContent = state.recognitionStats;
+  els.analyzeGalleryButton.disabled = busy || !state.images.length;
+  els.clearRecognitionCacheButton.disabled = busy || !Object.keys(state.recognitionCache.entries || {}).length;
+  els.gallerySearchInput.disabled = busy;
+  els.gallerySortSelect.disabled = busy;
+  els.galleryFilterSelect.disabled = busy;
   els.imageCount.title = `${visible} visible from ${state.images.length} total`;
 }
 
@@ -1452,15 +1541,16 @@ function renderRecognitionState() {
   const active = getActive();
   const recognition = active?.recognition || getCachedRecognition(active);
   const hasActive = Boolean(active);
+  const busy = state.recognitionRunning || state.batchRunning;
   const confidence = recognition ? `${Math.round((recognition.confidence || 0) * 100)}% ${recognition.scene}` : "Unanalyzed";
 
   els.recognitionConfidence.textContent = hasActive ? confidence : "-";
   replaceChips(els.recognitionTags, createRecognitionChips(recognition, { max: 8 }));
   els.activePeopleList.replaceChildren(...createPeopleChips(recognition?.people || []));
-  els.activePeopleInput.disabled = !hasActive || state.recognitionRunning;
-  els.addPersonButton.disabled = !hasActive || state.recognitionRunning;
-  els.removePeopleButton.disabled = !hasActive || state.recognitionRunning || !recognition?.people?.length;
-  els.analyzeCurrentButton.disabled = !hasActive || state.recognitionRunning;
+  els.activePeopleInput.disabled = !hasActive || busy;
+  els.addPersonButton.disabled = !hasActive || busy;
+  els.removePeopleButton.disabled = !hasActive || busy || !recognition?.people?.length;
+  els.analyzeCurrentButton.disabled = !hasActive || busy;
 }
 
 function createRecognitionChips(recognition, options = {}) {
@@ -1479,6 +1569,7 @@ function createRecognitionChips(recognition, options = {}) {
   const labels = [
     recognition.scene,
     ...(recognition.labels || []),
+    ...(recognition.tags || recognition.autoTags || []).map((tag) => `#${tag}`),
     ...(recognition.people || []).map((person) => `person: ${person}`),
   ].filter(Boolean);
   labels.slice(0, options.max || 6).forEach((label) => {
@@ -1767,23 +1858,20 @@ async function analyzeGalleryImages() {
   renderGalleryState();
   renderRecognitionState();
   try {
-    const images = state.images;
-    let analyzed = 0;
-    for (const image of images) {
-      try {
-        els.recognitionStatus.textContent = `${analyzed + 1}/${images.length}`;
-        await analyzeAndCacheImage(image);
-        analyzed += 1;
-      } catch (error) {
-        console.error(error);
-      }
-    }
+    await runSmartRecognitionBatch(state.images, {
+      statusPrefix: "Analyze",
+      force: false,
+      onProgress: ({ index, total }) => {
+        els.recognitionStatus.textContent = `${index}/${total}`;
+      },
+    });
     setActiveByImageId(getActive()?.id);
     render();
   } finally {
     state.recognitionRunning = false;
     renderGalleryState();
     renderRecognitionState();
+    updateButtons();
   }
 }
 
@@ -1794,7 +1882,8 @@ async function analyzeActiveRecognition() {
   renderGalleryState();
   renderRecognitionState();
   try {
-    await analyzeAndCacheImage(active);
+    await analyzeAndCacheImage(active, { force: true });
+    state.recognitionStats = "Current image refreshed";
     render();
   } catch (error) {
     console.error(error);
@@ -1802,13 +1891,80 @@ async function analyzeActiveRecognition() {
     state.recognitionRunning = false;
     renderGalleryState();
     renderRecognitionState();
+    updateButtons();
   }
 }
 
-async function analyzeAndCacheImage(image) {
+async function analyzeAndCacheImage(image, options = {}) {
+  if (!options.force) {
+    const cached = getCachedRecognition(image);
+    if (cached) {
+      image.recognition = cached;
+      return cached;
+    }
+  }
+  const started = performance.now();
   const recognition = await buildRecognitionForImage(image);
-  saveRecognitionForImage(image, recognition);
-  return recognition;
+  const elapsedMs = Math.round(performance.now() - started);
+  const next = {
+    ...recognition,
+    elapsedMs,
+  };
+  saveRecognitionForImage(image, next);
+  return image.recognition || next;
+}
+
+async function runSmartRecognitionBatch(images, options = {}) {
+  const uniqueImages = Array.from(new Map((images || []).filter(Boolean).map((image) => [image.id, image])).values());
+  const total = uniqueImages.length;
+  const stats = {
+    total,
+    hits: 0,
+    analyzed: 0,
+    tagged: 0,
+    elapsedMs: 0,
+  };
+  const started = performance.now();
+
+  for (let index = 0; index < total; index += 1) {
+    const image = uniqueImages[index];
+    options.onProgress?.({ index: index + 1, total, stats });
+    const cached = options.force ? null : getCachedRecognition(image);
+    if (cached) {
+      image.recognition = cached;
+      stats.hits += 1;
+      if (cached.tags?.length || cached.autoTags?.length) stats.tagged += 1;
+    } else {
+      try {
+        const recognition = await analyzeAndCacheImage(image, { force: true });
+        stats.analyzed += 1;
+        if (recognition?.tags?.length || recognition?.autoTags?.length) stats.tagged += 1;
+      } catch (error) {
+        console.error(error);
+      }
+    }
+    if (index % 6 === 5) await nextFrame();
+  }
+
+  stats.elapsedMs = Math.max(1, Math.round(performance.now() - started));
+  state.recognitionStats = formatRecognitionStats(stats, options.statusPrefix || "Analyze");
+  return stats;
+}
+
+function formatRecognitionStats(stats, label = "Analyze") {
+  if (!stats.total) return `${label}: no images`;
+  const rate = stats.elapsedMs ? Math.round((stats.total / stats.elapsedMs) * 1000) : stats.total;
+  const average = Math.max(1, Math.round(stats.elapsedMs / stats.total));
+  return `${label}: ${stats.analyzed} scanned, ${stats.hits} cache hits, ${stats.tagged} tagged in ${formatDuration(stats.elapsedMs)} (${rate}/sec, ${average}ms each)`;
+}
+
+function formatDuration(milliseconds) {
+  if (milliseconds < 1000) return `${milliseconds}ms`;
+  return `${(milliseconds / 1000).toFixed(milliseconds < 10000 ? 1 : 0)}s`;
+}
+
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
 async function buildRecognitionForImage(image) {
@@ -1823,14 +1979,16 @@ async function buildRecognitionForImage(image) {
     });
   }
 
-  const sample = await sampleImageMetrics(image);
+  const sample = await sampleImageMetrics(image, RECOGNITION_SAMPLE_SIZE);
   const metrics = analyzeRecognitionMetrics(sample.data, sample.size);
   const scene = classifyRecognitionScene(metrics, image);
+  const peopleLikely = scene.sceneKey === "people"
+    || (metrics.skinRatio > 0.11 && metrics.centerSkinRatio > 0.08 && metrics.edgeScore > 10);
   return makeRecognitionResult({
     ...scene,
     metrics,
-    peopleLikely: metrics.skinRatio > 0.055 || metrics.centerSkinRatio > 0.045,
-    faceCount: estimateFaceCount(metrics),
+    peopleLikely,
+    faceCount: peopleLikely ? estimateFaceCount(metrics) : 0,
     confidence: scene.confidence,
   });
 }
@@ -2057,6 +2215,8 @@ function clearPeopleFromActive() {
 
 function clearRecognitionCache() {
   state.recognitionCache = { version: 1, entries: {} };
+  state.recognitionStats = "Smart cache cleared";
+  state.sampleCache.clear();
   state.images.forEach((image) => {
     image.recognition = null;
   });
@@ -2434,6 +2594,156 @@ async function autoBatchEdit() {
   }
 }
 
+async function recognizeAndTagBatch() {
+  const images = getLibraryImages();
+  if (!images.length || state.batchRunning) return;
+  setBatchRunning(true);
+  state.recognitionRunning = true;
+  try {
+    setBatchStatus("Tagging");
+    const stats = await runSmartRecognitionBatch(images, {
+      statusPrefix: "Tag",
+      force: false,
+      onProgress: ({ index, total }) => {
+        setBatchStatus(`Tag ${index}/${total}`);
+      },
+    });
+    render();
+    setBatchStatus(`${stats.tagged} tagged`);
+  } catch (error) {
+    console.error(error);
+    setBatchStatus("Tag failed");
+  } finally {
+    state.recognitionRunning = false;
+    setBatchRunning(false);
+    renderGalleryState();
+    renderRecognitionState();
+  }
+}
+
+async function smartBatchEditByTags() {
+  const images = getLibraryImages();
+  if (!images.length || state.batchRunning) return;
+  setBatchRunning(true);
+  state.recognitionRunning = true;
+  state.editHistory = [];
+  try {
+    setBatchStatus("Smart tagging");
+    const stats = await runSmartRecognitionBatch(images, {
+      statusPrefix: "Smart",
+      force: false,
+      onProgress: ({ index, total }) => {
+        setBatchStatus(`Tag ${index}/${total}`);
+      },
+    });
+    const count = images.length;
+    for (let index = 0; index < count; index += 1) {
+      const image = images[index];
+      const recognition = image.recognition || getCachedRecognition(image);
+      setBatchStatus(`Smart edit ${index + 1}/${count}`);
+      ensureImageEdit(image);
+      image.edit = {
+        ...image.edit,
+        ...makeTagAwareBatchEdit(image, recognition),
+        crop: { ...image.edit.crop },
+      };
+      if (index % 12 === 11) await nextFrame();
+    }
+    render();
+    setBatchStatus(`${count} smart-edited`);
+    state.recognitionStats = `${state.recognitionStats} - ${count} tag edits applied`;
+    els.batchMetrics.textContent = `${formatRecognitionStats(stats, "Smart")} - ${count} tag edits applied`;
+  } catch (error) {
+    console.error(error);
+    setBatchStatus("Smart edit failed");
+  } finally {
+    state.recognitionRunning = false;
+    setBatchRunning(false);
+    renderGalleryState();
+    renderRecognitionState();
+  }
+}
+
+function makeTagAwareBatchEdit(image, recognition) {
+  const metrics = recognition?.metrics || {};
+  const scene = recognition?.sceneKey || "photo";
+  const avgLuma = Number(metrics.avgLuma || 128);
+  const avgSaturation = Number(metrics.avgSaturation || 0.24);
+  const exposure = Math.round(clamp(100 + (128 - avgLuma) * 0.32, 82, 132));
+  const saturation = Math.round(clamp(avgSaturation < 0.16 ? 116 : avgSaturation > 0.5 ? 98 : 108, 80, 132));
+  const edit = {
+    exposure,
+    contrast: 108,
+    saturation,
+    warmth: 0,
+    tint: 0,
+    fade: 0,
+    vignette: 5,
+    denoise: 8,
+  };
+
+  if (scene === "nature") {
+    return {
+      ...edit,
+      contrast: 112,
+      saturation: Math.max(edit.saturation, 116),
+      warmth: metrics.blueRatio > 0.18 ? -4 : 5,
+      denoise: 6,
+    };
+  }
+  if (scene === "night") {
+    return {
+      ...edit,
+      exposure: Math.max(edit.exposure, 110),
+      contrast: 118,
+      saturation: 106,
+      warmth: metrics.warmRatio > 0.08 ? 6 : -4,
+      vignette: 10,
+      denoise: 28,
+    };
+  }
+  if (scene === "people") {
+    return {
+      ...edit,
+      exposure: Math.max(edit.exposure, 104),
+      contrast: 104,
+      saturation: 104,
+      warmth: 8,
+      vignette: 4,
+      denoise: 12,
+    };
+  }
+  if (scene === "city") {
+    return {
+      ...edit,
+      contrast: 118,
+      saturation: 102,
+      warmth: -3,
+      denoise: 8,
+    };
+  }
+  if (scene === "document") {
+    return {
+      ...edit,
+      exposure: Math.max(edit.exposure, 110),
+      contrast: 130,
+      saturation: 70,
+      warmth: 0,
+      vignette: 0,
+      denoise: 4,
+    };
+  }
+  if (RAW_EXTENSIONS.has(extensionFromName(image.name))) {
+    return {
+      ...edit,
+      contrast: 104,
+      saturation: 104,
+      denoise: 0,
+    };
+  }
+  return edit;
+}
+
 function matchBatchToCurrent() {
   const active = getActive();
   if (!active || state.batchRunning) return;
@@ -2555,18 +2865,30 @@ async function analyzeDenoiseAmount(sourceImage) {
   return estimateDenoiseFromSample(sample.data, sample.size);
 }
 
-async function sampleImageMetrics(sourceImage) {
+async function sampleImageMetrics(sourceImage, sampleSize = 120) {
+  const cacheKey = `${sourceImage.recognitionKey || sourceImage.id || sourceImage.name}:${sampleSize}`;
+  const cached = state.sampleCache.get(cacheKey);
+  if (cached) {
+    state.sampleCache.delete(cacheKey);
+    state.sampleCache.set(cacheKey, cached);
+    return cached;
+  }
+
   const image = await loadImage(sourceImage.src);
-  const sampleSize = 120;
   const canvas = document.createElement("canvas");
   canvas.width = sampleSize;
   canvas.height = sampleSize;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   ctx.drawImage(image, 0, 0, sampleSize, sampleSize);
-  return {
+  const sample = {
     data: ctx.getImageData(0, 0, sampleSize, sampleSize).data,
     size: sampleSize,
   };
+  state.sampleCache.set(cacheKey, sample);
+  while (state.sampleCache.size > SAMPLE_CACHE_LIMIT) {
+    state.sampleCache.delete(state.sampleCache.keys().next().value);
+  }
+  return sample;
 }
 
 function estimateDenoiseFromSample(data, size) {
@@ -2856,7 +3178,7 @@ function updateButtons() {
   const images = getLibraryImages();
   const hasImages = images.length > 0;
   const multi = images.length > 1;
-  const disabled = !hasImages || state.batchRunning;
+  const disabled = !hasImages || state.batchRunning || state.recognitionRunning;
   [
     els.exportButton,
     els.previousButton,
@@ -2875,6 +3197,8 @@ function updateButtons() {
     els.autoDenoiseButton,
     els.resetEditsButton,
     els.autoBatchButton,
+    els.recognizeBatchButton,
+    els.smartBatchButton,
     els.matchBatchButton,
     els.copiesBatchButton,
     els.resetBatchButton,

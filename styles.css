@@ -448,6 +448,18 @@ h1 {
   font-weight: 800;
 }
 
+.recognitionMetrics {
+  min-height: 28px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
 .emptyGallery {
   display: grid;
   place-items: center;
@@ -1329,7 +1341,8 @@ h1 {
 .settingRow input,
 .settingRow select,
 .segmentButton,
-.recognitionScore {
+.recognitionScore,
+.recognitionMetrics {
   border-radius: 3px;
   border-color: #464646;
   background: #202020;

@@ -248,6 +248,7 @@
                   <span>Clear Cache</span>
                 </button>
               </div>
+              <div class="recognitionMetrics" id="recognitionMetrics">Smart cache ready</div>
             </section>
           </div>
           <div class="thumbRail" id="thumbRail"></div>
@@ -440,6 +441,14 @@
                   <i data-lucide="wand-sparkles"></i>
                   <span>Auto All</span>
                 </button>
+                <button class="batchButton primary" id="recognizeBatchButton" type="button">
+                  <i data-lucide="tags"></i>
+                  <span>Recognize + Tag</span>
+                </button>
+                <button class="batchButton" id="smartBatchButton" type="button">
+                  <i data-lucide="sparkles"></i>
+                  <span>Smart Edit Tags</span>
+                </button>
                 <button class="batchButton" id="matchBatchButton" type="button">
                   <i data-lucide="copy-check"></i>
                   <span>Match Look</span>
@@ -453,6 +462,7 @@
                   <span>Reset All</span>
                 </button>
               </div>
+              <div class="recognitionMetrics" id="batchMetrics">Batch can use recognition tags</div>
             </section>
 
             <section class="toolPanel" aria-label="Updates">

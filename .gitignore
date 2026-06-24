@@ -5,6 +5,7 @@ release/
 dist/
 *.log
 .server.pid
+reports/photo-sort/
 site/downloads/releases/
 site/downloads/*.exe
 site/downloads/*.AppImage

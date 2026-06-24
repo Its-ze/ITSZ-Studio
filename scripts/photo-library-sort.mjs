@@ -17,6 +17,7 @@ const RAW_EXTENSIONS = new Set([
   ".ptx", ".raf", ".raw", ".rw2", ".rwl", ".sr2", ".srf", ".srw", ".x3f",
 ]);
 const JPEG_EXTENSIONS = new Set([".jpe", ".jpeg", ".jpg"]);
+const FAST_METADATA_EXTENSIONS = new Set([".avif", ".bmp", ".dib", ".gif", ".jpe", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"]);
 const CACHE_DIR_NAMES = new Set([
   ".git",
   ".ts",
@@ -37,6 +38,7 @@ function parseArgs(argv) {
     mode: "plan",
     batchLimit: 32,
     batchMaxMb: 300,
+    metadataLimit: 250,
     includeDotFolders: false,
     reportDir: "",
     execute: false,
@@ -48,6 +50,7 @@ function parseArgs(argv) {
     else if (arg === "--mode") options.mode = argv[++index] || options.mode;
     else if (arg === "--batch-limit") options.batchLimit = Number(argv[++index] || options.batchLimit);
     else if (arg === "--batch-max-mb") options.batchMaxMb = Number(argv[++index] || options.batchMaxMb);
+    else if (arg === "--metadata-limit") options.metadataLimit = Number(argv[++index] || options.metadataLimit);
     else if (arg === "--report-dir") options.reportDir = argv[++index] || "";
     else if (arg === "--include-dot-folders") options.includeDotFolders = true;
     else if (arg === "--execute") options.execute = true;
@@ -75,6 +78,7 @@ Options:
   --mode <plan|test-copy|move-smart>
   --batch-limit <count>    Test-copy file count. Default: 32
   --batch-max-mb <mb>      Test-copy byte cap. Default: 300
+  --metadata-limit <count> Max safe image metadata reads. Default: 250
   --include-dot-folders    Include cache/dot folders such as .ts
   --report-dir <path>      Report output folder
   --execute                Required for move-smart`);
@@ -270,19 +274,25 @@ function buildSmartPlan(records, root) {
   });
 }
 
-async function buildRecords(files, root) {
+async function buildRecords(files, root, options) {
   const records = [];
+  let metadataReads = 0;
   for (const filePath of files) {
     const stats = await fs.stat(filePath);
     const relativePath = path.relative(root, filePath);
-    const metadata = await readImageMetadata(filePath);
+    const extension = path.extname(filePath).toLowerCase();
+    const readMetadata = metadataReads < options.metadataLimit && FAST_METADATA_EXTENSIONS.has(extension);
+    const metadata = readMetadata
+      ? await readImageMetadata(filePath)
+      : { width: 0, height: 0, camera: "", exifDate: null, metadataReadable: false };
+    if (readMetadata) metadataReads += 1;
     const capture = chooseCaptureDate(filePath, relativePath, stats, metadata);
     const category = classifyPhoto(filePath, relativePath, metadata);
     records.push({
       source: filePath,
       relativePath,
       name: path.basename(filePath),
-      extension: path.extname(filePath).toLowerCase(),
+      extension,
       size: stats.size,
       modified: stats.mtime.toISOString(),
       captureDate: capture.date,
@@ -414,7 +424,7 @@ async function main() {
   await fs.mkdir(reportDir, { recursive: true });
 
   const scan = await scanPhotos(options.root, options);
-  const records = await buildRecords(scan.files, options.root);
+  const records = await buildRecords(scan.files, options.root, options);
   const flattenPlan = buildFlattenPlan(records, options.root);
   const smartPlan = buildSmartPlan(records, options.root);
   const batchRecords = chooseBatch(records, options);

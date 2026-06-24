@@ -20,7 +20,7 @@ const JPEG_EXTENSIONS = new Set([".jpe", ".jpeg", ".jpg"]);
 const FAST_METADATA_EXTENSIONS = new Set([".avif", ".bmp", ".dib", ".gif", ".jpe", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"]);
 const VISUAL_RECOGNITION_EXTENSIONS = new Set([".avif", ".bmp", ".dib", ".jpe", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"]);
 const GENERIC_SCENE_KEYS = new Set(["photo", "raw", "jpg", "other"]);
-const RECOGNITION_CACHE_VERSION = 2;
+const RECOGNITION_CACHE_VERSION = 3;
 const RECOGNITION_SAMPLE_SIZE = 48;
 const CACHE_DIR_NAMES = new Set([
   ".git",
@@ -335,15 +335,15 @@ function classifyVisualScene(metrics, relativePath) {
   const text = String(relativePath || "").toLowerCase();
   const waterEvidence = metrics.blueRatio > 0.2 && metrics.avgBlue > metrics.avgRed * 1.05 && metrics.avgSaturation > 0.16;
   const theaterText = /theat(er|re)|cinema|movie|stage|auditorium|concert|performance|play\b/.test(text);
-  const theaterVisual = metrics.darkRatio > 0.42 && metrics.warmRatio > 0.06 && metrics.edgeScore > 9 && metrics.avgSaturation > 0.12;
+  const theaterVisual = metrics.darkRatio > 0.52 && metrics.warmRatio > 0.13 && metrics.blueRatio < 0.14 && metrics.skyRatio < 0.05 && metrics.edgeScore > 12;
 
-  if (theaterText || theaterVisual) {
+  if (theaterText) {
     return makeSemanticRecord(
       "Theater",
       "theater",
       ["indoor", "low-light", "event"],
-      theaterText ? 0.88 : clamp(0.55 + metrics.darkRatio * 0.35 + metrics.warmRatio, 0.5, 0.86),
-      theaterText ? "path" : "visual",
+      0.88,
+      "path",
       metrics,
     );
   }
@@ -355,6 +355,17 @@ function classifyVisualScene(metrics, relativePath) {
       ["water", metrics.skyRatio > 0.08 ? "sky" : "", "outdoors"],
       waterEvidence ? clamp(0.52 + metrics.blueRatio + metrics.skyRatio * 0.25, 0.5, 0.9) : 0.84,
       waterEvidence ? "visual" : "path",
+      metrics,
+    );
+  }
+
+  if (theaterVisual) {
+    return makeSemanticRecord(
+      "Theater",
+      "theater",
+      ["indoor", "low-light", "event"],
+      clamp(0.52 + metrics.darkRatio * 0.32 + metrics.warmRatio, 0.5, 0.82),
+      "visual",
       metrics,
     );
   }
@@ -802,19 +813,30 @@ async function main() {
   const runId = makeRunId();
   const reportDir = path.resolve(options.reportDir || path.join(process.cwd(), "reports", "photo-sort", runId));
   await fs.mkdir(reportDir, { recursive: true });
+  const cachePath = path.resolve(options.cachePath || path.join(process.cwd(), "reports", "photo-sort", `recognition-cache-v${RECOGNITION_CACHE_VERSION}.json`));
+  const recognitionCache = await loadRecognitionCache(cachePath);
 
   const scan = await scanPhotos(options.root, options);
-  const records = await buildRecords(scan.files, options.root, options);
+  const records = await buildRecords(scan.files, options.root, options, recognitionCache);
+  await saveRecognitionCache(cachePath, recognitionCache);
   const flattenPlan = buildFlattenPlan(records, options.root);
   const smartPlan = buildSmartPlan(records, options.root);
+  const semanticPlan = buildSemanticPlan(records, options.root);
   const batchRecords = chooseBatch(records, options);
   const batchFlatten = buildFlattenPlan(batchRecords, options.root);
   const batchSmart = buildSmartPlan(batchRecords, options.root);
+  const batchSemantic = buildSemanticPlan(batchRecords, options.root);
 
   const columns = [
     "strategy",
     "relativePath",
     "category",
+    "semanticScene",
+    "semanticConfidence",
+    "recognitionSource",
+    "groupingReason",
+    "eventName",
+    "eventCluster",
     "captureDateText",
     "dateSource",
     "extension",
@@ -825,14 +847,17 @@ async function main() {
   ];
   await writeCsv(path.join(reportDir, "plan-flatten.csv"), flattenPlan, columns);
   await writeCsv(path.join(reportDir, "plan-smart.csv"), smartPlan, columns);
+  await writeCsv(path.join(reportDir, "plan-semantic.csv"), semanticPlan, columns);
   await writeCsv(path.join(reportDir, "test-batch-smart.csv"), batchSmart, columns);
   await writeCsv(path.join(reportDir, "test-batch-flatten.csv"), batchFlatten, columns);
+  await writeCsv(path.join(reportDir, "test-batch-semantic.csv"), batchSemantic, columns);
 
   let testCopyRoot = "";
   if (options.mode === "test-copy") {
     testCopyRoot = path.join(options.root, "_ITSZ Sort Test", runId);
     await copyPlan(batchFlatten, path.join(testCopyRoot, "flatten"), options.root);
     await copyPlan(batchSmart, path.join(testCopyRoot, "smart"), options.root);
+    await copyPlan(batchSemantic, path.join(testCopyRoot, "semantic"), options.root);
   }
 
   if (options.mode === "move-smart") {
@@ -840,6 +865,12 @@ async function main() {
       throw new Error("move-smart requires --execute. Run plan or test-copy first.");
     }
     await movePlan(smartPlan, options.root);
+  }
+  if (options.mode === "move-semantic") {
+    if (!options.execute) {
+      throw new Error("move-semantic requires --execute. Run plan or test-copy first.");
+    }
+    await movePlan(semanticPlan, options.root);
   }
 
   const summary = {
@@ -850,14 +881,22 @@ async function main() {
     skippedDirectories: scan.skippedDirectories,
     flattened: summarizePlan(flattenPlan),
     smart: summarizePlan(smartPlan),
+    semantic: summarizePlan(semanticPlan),
+    recognition: {
+      cachePath,
+      metadataReads: records.stats?.metadataReads || 0,
+      visualReads: records.stats?.recognitionReads || 0,
+      cacheHits: records.stats?.recognitionCacheHits || 0,
+      limit: options.noRecognition ? 0 : options.recognitionLimit,
+    },
     testBatch: {
-      files: batchSmart.length,
-      totalMb: Number((batchSmart.reduce((sum, row) => sum + row.size, 0) / 1024 / 1024).toFixed(2)),
+      files: batchSemantic.length,
+      totalMb: Number((batchSemantic.reduce((sum, row) => sum + row.size, 0) / 1024 / 1024).toFixed(2)),
       copiedTo: testCopyRoot,
     },
     recommendation: {
-      use: "smart",
-      reason: "Flattening creates name collisions and removes useful date/type context; smart keeps capture-date folders, RAW/JPG separation, screenshots, edits, and unknown-date fallbacks.",
+      use: "semantic",
+      reason: "Semantic sorting keeps the date/type protection from smart sorting, then promotes recognizable events such as Water Vacation, Theater, Nature, People, Screenshots, and Documents before the date folder.",
     },
   };
 

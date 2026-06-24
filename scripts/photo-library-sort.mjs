@@ -20,7 +20,7 @@ const JPEG_EXTENSIONS = new Set([".jpe", ".jpeg", ".jpg"]);
 const FAST_METADATA_EXTENSIONS = new Set([".avif", ".bmp", ".dib", ".gif", ".jpe", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp"]);
 const VISUAL_RECOGNITION_EXTENSIONS = new Set([".avif", ".bmp", ".dib", ".jpe", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"]);
 const GENERIC_SCENE_KEYS = new Set(["photo", "raw", "jpg", "other"]);
-const RECOGNITION_CACHE_VERSION = 3;
+const RECOGNITION_CACHE_VERSION = 4;
 const RECOGNITION_SAMPLE_SIZE = 48;
 const CACHE_DIR_NAMES = new Set([
   ".git",
@@ -361,8 +361,8 @@ function classifyVisualScene(metrics, relativePath) {
 
   if (theaterVisual) {
     return makeSemanticRecord(
-      "Theater",
-      "theater",
+      "Indoor / Low Light",
+      "indoor-low-light",
       ["indoor", "low-light", "event"],
       clamp(0.52 + metrics.darkRatio * 0.32 + metrics.warmRatio, 0.5, 0.82),
       "visual",
@@ -497,7 +497,7 @@ function applySemantic(record, semantic, reason) {
   record.groupingReason = reason || semantic.source;
 }
 
-function strongestSemantic(records) {
+function strongestSemantic(records, options = {}) {
   const weighted = new Map();
   const exemplars = new Map();
   for (const record of records) {
@@ -515,7 +515,9 @@ function strongestSemantic(records) {
     scene: exemplar.semanticScene,
     sceneKey: exemplar.semanticKey,
     labels: String(exemplar.semanticLabels || "").split(";").filter(Boolean),
-    confidence: clamp(score / Math.max(1, records.length), 0.45, 0.94),
+    confidence: options.average
+      ? clamp(score / Math.max(1, records.length), 0.45, 0.94)
+      : clamp(semanticStrength(exemplar), 0.45, 0.94),
     source: "correlated",
   };
 }
@@ -545,12 +547,13 @@ function correlateSemanticEvents(records) {
 
   for (const group of eventGroups.values()) {
     if (group.length < 3) continue;
-    const semantic = strongestSemantic(group);
+    const semantic = strongestSemantic(group, { average: true });
     if (!semantic || semantic.confidence < 0.42) continue;
     const count = group.filter((record) => record.semanticKey === semantic.sceneKey).length;
     if (count < 2 && count / group.length < 0.35) continue;
     for (const record of group) {
       if (record.semanticKey === "screenshots" || record.semanticKey === "documents") continue;
+      if (record.groupingReason === "raw-jpg-pair" && semanticStrength(record) >= 0.58) continue;
       if (semanticStrength(record) < 0.58 || GENERIC_SCENE_KEYS.has(record.semanticKey)) applySemantic(record, semantic, "same-day-event");
     }
   }

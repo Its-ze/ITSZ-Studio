@@ -899,7 +899,7 @@ async function main() {
     },
     recommendation: {
       use: "semantic",
-      reason: "Semantic sorting keeps the date/type protection from smart sorting, then promotes recognizable events such as Water Vacation, Theater, Nature, People, Screenshots, and Documents before the date folder.",
+      reason: "Semantic sorting keeps the date/type protection from smart sorting, then promotes recognizable events such as Water Vacation, Nature, People, Screenshots, Documents, and path-confirmed Theater before the date folder.",
     },
   };
 

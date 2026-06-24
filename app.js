@@ -944,6 +944,23 @@ function recognitionPeopleText(image) {
   return recognition?.peopleLikely ? "People" : "No people";
 }
 
+function pluralize(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatCameraPhotoCount(camera) {
+  const total = Number(camera?.photoCount || 0);
+  const summary = camera?.photoSummary || {};
+  const details = [];
+
+  if (summary.pairs) details.push(pluralize(summary.pairs, "RAW+JPG pair"));
+  if (summary.rawOnly) details.push(`${pluralize(summary.rawOnly, "RAW-only file")}`);
+  if (summary.jpgOnly) details.push(`${pluralize(summary.jpgOnly, "JPG-only file")}`);
+  if (summary.other) details.push(pluralize(summary.other, "other photo"));
+
+  return `${pluralize(total, "photo file")}${details.length ? ` (${details.join(", ")})` : ""}`;
+}
+
 function getPairCounts() {
   let pairs = 0;
   for (const group of buildRawPairGroups().values()) {
@@ -1525,7 +1542,7 @@ function renderLibraryState() {
     : "Off";
 
   if (camera) {
-    const count = `${camera.photoCount} photo file${camera.photoCount === 1 ? "" : "s"}`;
+    const count = formatCameraPhotoCount(camera);
     const samples = camera.sampleNames?.length ? `: ${camera.sampleNames.join(", ")}` : "";
     els.cameraPrompt.textContent = info.homeFolder
       ? `Import ${count} from ${camera.name}${samples}`
@@ -1773,6 +1790,7 @@ async function scanForCameras() {
       ...state.libraryInfo,
       camera: cameras[0] || null,
       cameraStatus: cameras.length ? "Detected" : "No camera",
+      status: cameras.length ? `Found ${formatCameraPhotoCount(cameras[0])}` : "No camera found",
     };
   } catch (error) {
     console.error(error);

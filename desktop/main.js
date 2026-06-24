@@ -183,6 +183,43 @@ function isPhotoPath(filePath) {
   return PHOTO_EXTENSIONS.has(extensionFor(filePath));
 }
 
+function photoSummaryFromNames(names) {
+  const summary = {
+    raw: 0,
+    jpg: 0,
+    other: 0,
+    pairs: 0,
+    rawOnly: 0,
+    jpgOnly: 0,
+  };
+  const rawKeys = new Set();
+  const jpgKeys = new Set();
+
+  for (const name of names) {
+    const extension = extensionFor(name);
+    const key = String(name || "").replace(/\\/g, "/").replace(/\.[^.\/]+$/, "").toLowerCase();
+    if (RAW_EXTENSIONS.has(extension)) {
+      summary.raw += 1;
+      rawKeys.add(key);
+    } else if (JPEG_EXTENSIONS.has(extension)) {
+      summary.jpg += 1;
+      jpgKeys.add(key);
+    } else {
+      summary.other += 1;
+    }
+  }
+
+  for (const key of rawKeys) {
+    if (jpgKeys.has(key)) summary.pairs += 1;
+    else summary.rawOnly += 1;
+  }
+  for (const key of jpgKeys) {
+    if (!rawKeys.has(key)) summary.jpgOnly += 1;
+  }
+
+  return summary;
+}
+
 function powerShellQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
@@ -339,6 +376,13 @@ foreach ($device in @($computer.Items())) {
     root = [string]$device.Name
     photoCount = $photos.Count
     sampleNames = @($photos | Select-Object -First 3 | ForEach-Object { $_.Name })
+    photoNames = @($photos | ForEach-Object {
+      if ($_.RelativeFolder) {
+        "$($_.RelativeFolder)/$($_.Name)"
+      } else {
+        $_.Name
+      }
+    })
   }) | Out-Null
 }
 
@@ -576,6 +620,7 @@ function buildCameraDevice(volume) {
   const scanRoots = getCameraScanRoots(volume.root);
   const photoFiles = scanPhotoFiles(scanRoots, { maxFiles: 5000, maxDepth: 12 });
   if (!photoFiles.length) return null;
+  const relativeNames = photoFiles.map((filePath) => path.relative(volume.root, filePath));
 
   return {
     id: volume.id,
@@ -585,6 +630,7 @@ function buildCameraDevice(volume) {
     scanRoots,
     photoCount: photoFiles.length,
     sampleNames: photoFiles.slice(0, 3).map((filePath) => path.basename(filePath)),
+    photoSummary: photoSummaryFromNames(relativeNames),
   };
 }
 
@@ -595,6 +641,7 @@ function publicCameraDevice(device) {
     root: device.root,
     photoCount: device.photoCount,
     sampleNames: device.sampleNames,
+    photoSummary: device.photoSummary || null,
   };
 }
 
@@ -695,6 +742,7 @@ function cloneCameraDevice(device) {
   return {
     ...device,
     sampleNames: Array.isArray(device.sampleNames) ? [...device.sampleNames] : [],
+    photoSummary: device.photoSummary ? { ...device.photoSummary } : undefined,
     scanRoots: Array.isArray(device.scanRoots) ? [...device.scanRoots] : undefined,
     gphotoFiles: Array.isArray(device.gphotoFiles) ? device.gphotoFiles.map((file) => ({ ...file })) : undefined,
   };
@@ -711,15 +759,19 @@ async function listWindowsPortableCameras(options = {}) {
     const devices = await runPowerShellScriptJson(WINDOWS_PORTABLE_CAMERA_LIST_SCRIPT, { timeout: 45000 });
     const portableDevices = devices
       .filter((device) => device.shellPath && device.photoCount > 0)
-      .map((device) => ({
-        id: portableDeviceId(device.shellPath),
-        kind: "wpd",
-        name: device.name || "Portable Camera",
-        root: device.root || device.name || "Portable Camera",
-        shellPath: device.shellPath,
-        photoCount: Number(device.photoCount) || 0,
-        sampleNames: Array.isArray(device.sampleNames) ? device.sampleNames : [],
-      }));
+      .map((device) => {
+        const photoNames = Array.isArray(device.photoNames) ? device.photoNames : [];
+        return {
+          id: portableDeviceId(device.shellPath),
+          kind: "wpd",
+          name: device.name || "Portable Camera",
+          root: device.root || device.name || "Portable Camera",
+          shellPath: device.shellPath,
+          photoCount: Number(device.photoCount) || 0,
+          sampleNames: Array.isArray(device.sampleNames) ? device.sampleNames : [],
+          photoSummary: photoSummaryFromNames(photoNames),
+        };
+      });
     portableCameraCache = {
       scannedAt: Date.now(),
       devices: portableDevices.map(cloneCameraDevice),
@@ -925,6 +977,7 @@ async function listLinuxGphotoCameras(options = {}) {
         port: camera.port,
         photoCount: photoFiles.length,
         sampleNames: photoFiles.slice(0, 3).map((file) => file.name),
+        photoSummary: photoSummaryFromNames(photoFiles.map((file) => file.name)),
         gphotoFiles: photoFiles.slice(0, 10000),
       });
     }

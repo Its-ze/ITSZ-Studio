@@ -28,6 +28,21 @@ body {
   padding: 48px 0;
 }
 
+.portalNav {
+  margin-bottom: 18px;
+}
+
+.portalNav a {
+  color: var(--teal);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.portalNav a:hover,
+.portalNav a:focus-visible {
+  text-decoration: underline;
+}
+
 .hero {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);

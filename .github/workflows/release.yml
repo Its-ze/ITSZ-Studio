@@ -75,6 +75,9 @@ jobs:
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
           PAGES_BASE_URL: https://its-ze.github.io/ITSZ-Studio/downloads
+      - run: node scripts/verify-release-manifest.mjs
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -11,7 +11,7 @@
   "scripts": {
     "start": "electron .",
     "make:icons": "node scripts/generate-icons.mjs",
-    "validate": "node --check app.js && node --check desktop/main.js && node --check desktop/preload.js && node --check scripts/generate-icons.mjs && node --check scripts/prepare-pages.mjs && node --check scripts/photo-library-sort.mjs",
+    "validate": "node --check app.js && node --check desktop/main.js && node --check desktop/preload.js && node --check scripts/generate-icons.mjs && node --check scripts/prepare-pages.mjs && node --check scripts/verify-release-manifest.mjs && node --check scripts/photo-library-sort.mjs",
     "photos:sort": "node scripts/photo-library-sort.mjs",
     "dist": "npm run make:icons && electron-builder",
     "dist:win": "npm run make:icons && electron-builder --win nsis portable",
@@ -24,7 +24,7 @@
     "electron": "^42.4.0",
     "electron-builder": "^26.15.3",
     "png-to-ico": "^2.1.8",
-    "sharp": "^0.33.5"
+    "sharp": "^0.35.3"
   },
   "build": {
     "appId": "studio.itsz.desktop",

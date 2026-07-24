@@ -37,13 +37,24 @@ curl -fsSL "$BASE_URL/updates.json" -o "$WORK_DIR/updates.json"
 VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$WORK_DIR/updates.json")"
 DEB_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["installers"]["linux"].get("deb") or "")' "$WORK_DIR/updates.json")"
 APPIMAGE_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["installers"]["linux"].get("appImage") or "")' "$WORK_DIR/updates.json")"
+DEB_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("verification",{}).get("artifacts",{}).get("linuxDeb",{}).get("sha256") or "")' "$WORK_DIR/updates.json")"
+APPIMAGE_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("verification",{}).get("artifacts",{}).get("linuxAppImage",{}).get("sha256") or "")' "$WORK_DIR/updates.json")"
 
 if [[ -n "$DEB_URL" ]] && need_cmd apt-get; then
+  if [[ -z "$DEB_SHA256" ]]; then
+    echo "No deb SHA-256 is listed in $BASE_URL/updates.json" >&2
+    exit 1
+  fi
   DEB_PATH="$WORK_DIR/itsz-studio.deb"
   echo "Downloading ITSZ's Studio $VERSION deb package..."
   curl -fL "$DEB_URL" -o "$DEB_PATH"
+  printf '%s  %s\n' "$DEB_SHA256" "$DEB_PATH" | sha256sum -c -
   sudo apt-get install -y "$DEB_PATH"
 elif [[ -n "$APPIMAGE_URL" ]]; then
+  if [[ -z "$APPIMAGE_SHA256" ]]; then
+    echo "No AppImage SHA-256 is listed in $BASE_URL/updates.json" >&2
+    exit 1
+  fi
   INSTALL_DIR="${HOME}/.local/opt/itsz-studio"
   BIN_DIR="${HOME}/.local/bin"
   DESKTOP_DIR="${HOME}/.local/share/applications"
@@ -51,6 +62,7 @@ elif [[ -n "$APPIMAGE_URL" ]]; then
   APPIMAGE_PATH="$INSTALL_DIR/ITSZ-Studio.AppImage"
   echo "Downloading ITSZ's Studio $VERSION AppImage..."
   curl -fL "$APPIMAGE_URL" -o "$APPIMAGE_PATH"
+  printf '%s  %s\n' "$APPIMAGE_SHA256" "$APPIMAGE_PATH" | sha256sum -c -
   chmod +x "$APPIMAGE_PATH"
   ln -sf "$APPIMAGE_PATH" "$BIN_DIR/itsz-studio"
   cat > "$DESKTOP_DIR/itsz-studio.desktop" <<DESKTOP
